@@ -98,18 +98,17 @@ func NewWinRMClient(cfg ConnectionConfig) (*WinRMClient, error) {
 		if spn == "" {
 			spn = "HTTP/" + cfg.Host
 		}
+		proto := protoFromTLS(cfg.UseTLS)
 		params := *winrm.DefaultParameters
 		params.TransportDecorator = func() winrm.Transporter {
-			return &winrm.ClientKerberos{
-				Username:  cfg.Username,
-				Password:  cfg.Password,
-				Hostname:  cfg.Host,
-				Realm:     cfg.Realm,
-				Port:      cfg.Port,
-				Proto:     protoFromTLS(cfg.UseTLS),
-				KrbConf:   krbConf,
-				KrbCCache: cfg.KrbCCache,
-				SPN:       spn,
+			return &krbTransporter{
+				username:  cfg.Username,
+				password:  cfg.Password,
+				realm:     cfg.Realm,
+				krbConf:   krbConf,
+				krbCCache: cfg.KrbCCache,
+				spn:       spn,
+				url:       fmt.Sprintf("%s://%s:%d/wsman", proto, cfg.Host, cfg.Port),
 			}
 		}
 		client, err = winrm.NewClientWithParameters(endpoint, "", "", &params)

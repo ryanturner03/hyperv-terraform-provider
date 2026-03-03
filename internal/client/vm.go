@@ -60,6 +60,11 @@ func (c *WinRMClient) CreateVM(ctx context.Context, opts VMOptions) (*VM, error)
 		return nil, fmt.Errorf("create VM %q: %w", opts.Name, err)
 	}
 
+	// Remove the default network adapter created by New-VM so that only
+	// Terraform-managed hyperv_network_adapter resources define NICs.
+	removeNIC := fmt.Sprintf("Remove-VMNetworkAdapter -VMName %s -ErrorAction SilentlyContinue", EscapePSString(opts.Name))
+	_, _, _ = c.ps.Run(ctx, removeNIC)
+
 	err = retryOnConflict(ctx, 3, 3*time.Second, func() error {
 		_, _, err := c.ps.Run(ctx, buildSetVMCommand(opts))
 		return err

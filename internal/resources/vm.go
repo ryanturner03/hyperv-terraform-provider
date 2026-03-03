@@ -321,7 +321,13 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 	}
 
-	// Read final state
+	// Re-read VM to capture final state (e.g., after starting)
+	vm, err = r.client.GetVM(ctx, vmName)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading VM after create", err.Error())
+		return
+	}
+
 	mapVMToState(vm, &plan, &resp.Diagnostics)
 
 	if isGen2 {
@@ -388,27 +394,42 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		CheckpointType:       plan.CheckpointType.ValueString(),
 	}
 
+	isGen2 := plan.Generation.ValueInt64() == 2
+	plannedState := plan.State.ValueString()
+	currentState := state.State.ValueString()
+
+	// Firmware and first boot device changes require the VM to be off.
+	// If the VM is running, stop it before making config changes, then
+	// restart it afterward if the planned state is still "Running".
+	needsFirmware := isGen2 && r.buildFirmwareOpts(plan) != nil
+	needsBootDevice := isGen2 && !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown()
+	stoppedForConfig := false
+
+	if currentState == "Running" && (needsFirmware || needsBootDevice) {
+		if err := r.client.SetVMState(ctx, name, client.VMStateOff); err != nil {
+			resp.Diagnostics.AddError("Error stopping VM for firmware changes", err.Error())
+			return
+		}
+		stoppedForConfig = true
+	}
+
 	err := r.client.UpdateVM(ctx, name, opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating VM", err.Error())
 		return
 	}
 
-	isGen2 := plan.Generation.ValueInt64() == 2
-
 	// Configure firmware for Gen 2 VMs
-	if isGen2 {
+	if needsFirmware {
 		fwOpts := r.buildFirmwareOpts(plan)
-		if fwOpts != nil {
-			if err := r.client.SetVMFirmware(ctx, name, *fwOpts); err != nil {
-				resp.Diagnostics.AddError("Error configuring VM firmware", err.Error())
-				return
-			}
+		if err := r.client.SetVMFirmware(ctx, name, *fwOpts); err != nil {
+			resp.Diagnostics.AddError("Error configuring VM firmware", err.Error())
+			return
 		}
 	}
 
 	// Set first boot device if configured (Gen 2 only)
-	if isGen2 && !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown() {
+	if needsBootDevice {
 		var fbd firstBootDeviceModel
 		resp.Diagnostics.Append(plan.FirstBootDevice.As(ctx, &fbd, basetypes.ObjectAsOptions{})...)
 		if resp.Diagnostics.HasError() {
@@ -430,12 +451,10 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		}
 	}
 
-	// Handle state change
-	plannedState := plan.State.ValueString()
-	currentState := state.State.ValueString()
-	if plannedState != currentState {
-		err := r.client.SetVMState(ctx, name, client.VMState(plannedState))
-		if err != nil {
+	// Handle state change: start if planned Running, or restart if we stopped for config
+	if plannedState != currentState || stoppedForConfig {
+		targetState := client.VMState(plannedState)
+		if err := r.client.SetVMState(ctx, name, targetState); err != nil {
 			resp.Diagnostics.AddError("Error setting VM state", err.Error())
 			return
 		}
