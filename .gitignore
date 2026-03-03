@@ -1,0 +1,26 @@
+# Build artifacts
+terraform-provider-hyperv
+terraform-provider-hyperv.exe
+/e2e
+/e2e-gen2
+
+# Terraform state and local config
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Packer
+packer_cache/
+*.box
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
