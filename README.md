@@ -74,7 +74,7 @@ resource "hyperv_vm" "web" {
   dynamic_memory       = true
   memory_minimum_bytes = 2147483648 # 2GB
   memory_maximum_bytes = 8589934592 # 8GB
-  state                = "Running"
+  state                = "Off"
 }
 
 resource "hyperv_vhd" "os_disk" {

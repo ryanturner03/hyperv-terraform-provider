@@ -70,7 +70,7 @@ resource "hyperv_vm" "linux" {
   state                = "Off"
   secure_boot_enabled  = false  # Linux needs Secure Boot off
 
-  first_boot_device {
+  first_boot_device = {
     device_type         = "HardDiskDrive"
     controller_number   = 0
     controller_location = 0
@@ -152,7 +152,7 @@ resource "hyperv_vm" "windows" {
   secure_boot_enabled  = true
   secure_boot_template = "MicrosoftWindows"
 
-  first_boot_device {
+  first_boot_device = {
     device_type         = "HardDiskDrive"
     controller_number   = 0
     controller_location = 0

@@ -53,7 +53,23 @@ resource "hyperv_vm" "web" {
   dynamic_memory       = true
   memory_minimum_bytes = 2147483648 # 2GB
   memory_maximum_bytes = 8589934592 # 8GB
-  state                = "Running"
+  state                = "Off"
+
+  first_boot_device = {
+    device_type         = "HardDiskDrive"
+    controller_number   = 0
+    controller_location = 0
+  }
+}
+
+# Attach the OS disk to the VM
+resource "hyperv_hard_drive" "web_os" {
+  provider            = hyperv.lab_host
+  vm_name             = hyperv_vm.web.name
+  controller_type     = "SCSI"
+  controller_number   = 0
+  controller_location = 0
+  path                = hyperv_vhd.os_disk.path
 }
 
 # Attach a network adapter

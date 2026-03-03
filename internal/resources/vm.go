@@ -302,14 +302,29 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 			ControllerLocation: int(fbd.ControllerLocation.ValueInt64()),
 		}
 		if err := r.client.SetVMFirstBootDevice(ctx, vmName, device); err != nil {
-			_ = r.client.DeleteVM(ctx, vmName)
-			resp.Diagnostics.AddError(
-				"Error setting first boot device",
-				fmt.Sprintf("Drive at controller %d:%d not attached yet. Ensure drive resources are created first, or create the VM with state = \"Off\" and update to \"Running\" after drives exist. Detail: %s",
-					device.ControllerNumber, device.ControllerLocation, err.Error()),
-			)
-			return
+			if strings.Contains(err.Error(), "not attached yet") {
+				resp.Diagnostics.AddWarning(
+					"First boot device not set — drive not attached yet",
+					fmt.Sprintf("The drive at controller %d:%d does not exist on the VM yet. "+
+						"This is expected when drive resources are created separately. "+
+						"The boot device will be configured on the next terraform apply after drives are attached.",
+						device.ControllerNumber, device.ControllerLocation),
+				)
+			} else {
+				_ = r.client.DeleteVM(ctx, vmName)
+				resp.Diagnostics.AddError("Error setting first boot device", err.Error())
+				return
+			}
 		}
+	}
+
+	// Warn when starting during Create — drives likely aren't attached yet
+	if plan.State.ValueString() == "Running" {
+		resp.Diagnostics.AddWarning(
+			"VM starting before drives may be attached",
+			"Drives managed as separate resources may not exist yet. "+
+				"Consider state = \"Off\", then change to \"Running\" after drives are attached.",
+		)
 	}
 
 	// Start VM if requested
