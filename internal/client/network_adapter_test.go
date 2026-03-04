@@ -90,7 +90,8 @@ func TestCreateNetworkAdapter_MACAssignedImmediately(t *testing.T) {
 }
 
 func TestCreateNetworkAdapter_MACNeverAssigned(t *testing.T) {
-	responses := make([]any, 6)
+	// 1 initial + 10 retries = 11 total
+	responses := make([]any, 11)
 	for i := range responses {
 		responses[i] = NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "000000000000", DynamicMacAddress: true}
 	}
@@ -107,8 +108,35 @@ func TestCreateNetworkAdapter_MACNeverAssigned(t *testing.T) {
 	if adapter.MacAddress != "000000000000" {
 		t.Errorf("expected MAC 000000000000, got %s", adapter.MacAddress)
 	}
-	// 1 initial + 5 retries = 6 total
-	if mock.runJSONCalls != 6 {
-		t.Errorf("expected 6 RunJSON calls, got %d", mock.runJSONCalls)
+	if mock.runJSONCalls != 11 {
+		t.Errorf("expected 11 RunJSON calls, got %d", mock.runJSONCalls)
+	}
+}
+
+func TestCreateNetworkAdapter_StaticMAC_NoRetry(t *testing.T) {
+	// When a static MAC is provided, no retry should occur even if
+	// the read-back returns 000000000000 (the retry condition uses
+	// opts.MacAddress, not adapter.DynamicMacAddress).
+	mock := &mockPS{
+		jsonResponses: []any{
+			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "000000000000", DynamicMacAddress: false},
+		},
+	}
+	c := newTestClient(mock)
+
+	adapter, err := c.CreateNetworkAdapter(context.Background(), AdapterOptions{
+		VMName:     "vm1",
+		Name:       "eth0",
+		MacAddress: "AABBCCDDEEFF",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should return the read-back value without retrying
+	if adapter.MacAddress != "000000000000" {
+		t.Errorf("expected MAC 000000000000 (no retry for static), got %s", adapter.MacAddress)
+	}
+	if mock.runJSONCalls != 1 {
+		t.Errorf("expected 1 RunJSON call (no retry), got %d", mock.runJSONCalls)
 	}
 }
