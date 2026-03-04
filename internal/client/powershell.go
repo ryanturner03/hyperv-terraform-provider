@@ -9,6 +9,12 @@ import (
 	"github.com/masterzen/winrm"
 )
 
+// psExecutor abstracts PowerShell command execution for testing.
+type psExecutor interface {
+	Run(ctx context.Context, command string) (string, string, error)
+	RunJSON(ctx context.Context, command string, result any) error
+}
+
 // EscapePSString wraps a value in single quotes with internal single quotes doubled.
 func EscapePSString(s string) string {
 	escaped := strings.ReplaceAll(s, "'", "''")

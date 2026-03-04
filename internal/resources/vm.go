@@ -289,6 +289,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 
 	// Set first boot device if configured (Gen 2 only)
+	bootDeviceDeferred := false
 	if isGen2 && !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown() {
 		var fbd firstBootDeviceModel
 		resp.Diagnostics.Append(plan.FirstBootDevice.As(ctx, &fbd, basetypes.ObjectAsOptions{})...)
@@ -303,6 +304,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 		if err := r.client.SetVMFirstBootDevice(ctx, vmName, device); err != nil {
 			if strings.Contains(err.Error(), "not attached yet") {
+				bootDeviceDeferred = true
 				resp.Diagnostics.AddWarning(
 					"First boot device not set — drive not attached yet",
 					fmt.Sprintf("The drive at controller %d:%d does not exist on the VM yet. "+
@@ -346,7 +348,14 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	mapVMToState(vm, &plan, &resp.Diagnostics)
 
 	if isGen2 {
+		plannedFBD := plan.FirstBootDevice
 		r.readFirmwareState(ctx, vmName, &plan, &resp.Diagnostics)
+		// When the boot device was deferred (drive not attached yet),
+		// preserve the planned value so Terraform doesn't see a
+		// null vs. configured mismatch ("inconsistent result after apply").
+		if bootDeviceDeferred {
+			plan.FirstBootDevice = plannedFBD
+		}
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
