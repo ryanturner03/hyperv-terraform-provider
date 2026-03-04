@@ -13,7 +13,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -103,11 +105,17 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				Optional:    true,
 				Computed:    true,
 				Description: "The minimum memory in bytes when dynamic memory is enabled.",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"memory_maximum_bytes": schema.Int64Attribute{
 				Optional:    true,
 				Computed:    true,
 				Description: "The maximum memory in bytes when dynamic memory is enabled.",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"dynamic_memory": schema.BoolAttribute{
 				Optional:    true,
@@ -128,6 +136,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				Optional:    true,
 				Computed:    true,
 				Description: "Notes or description for the virtual machine.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"automatic_start_action": schema.StringAttribute{
 				Optional:    true,
@@ -135,6 +146,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				Description: "The action to take when the host starts (Nothing, Start, StartIfRunning).",
 				Validators: []validator.String{
 					stringvalidator.OneOf("Nothing", "StartIfRunning", "Start"),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"automatic_stop_action": schema.StringAttribute{
@@ -144,6 +158,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				Validators: []validator.String{
 					stringvalidator.OneOf("TurnOff", "Save", "ShutDown"),
 				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"checkpoint_type": schema.StringAttribute{
 				Optional:    true,
@@ -152,11 +169,17 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				Validators: []validator.String{
 					stringvalidator.OneOf("Disabled", "Production", "ProductionOnly", "Standard"),
 				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"secure_boot_enabled": schema.BoolAttribute{
 				Optional:    true,
 				Computed:    true,
 				Description: "Whether Secure Boot is enabled (Generation 2 only).",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"secure_boot_template": schema.StringAttribute{
 				Optional:    true,
@@ -165,11 +188,17 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				Validators: []validator.String{
 					stringvalidator.OneOf("MicrosoftWindows", "MicrosoftUEFICertificateAuthority"),
 				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"first_boot_device": schema.SingleNestedAttribute{
 				Optional:    true,
 				Computed:    true,
 				Description: "The first boot device (Generation 2 only). Note: the referenced drive must already exist on the VM.",
+				PlanModifiers: []planmodifier.Object{
+					objectplanmodifier.UseStateForUnknown(),
+				},
 				Attributes: map[string]schema.Attribute{
 					"device_type": schema.StringAttribute{
 						Required:    true,
@@ -202,6 +231,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 							Optional:    true,
 							Computed:    true,
 							Description: "Path to the VHD/VHDX file.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 						"controller_type": schema.StringAttribute{
 							Optional:    true,
@@ -222,6 +254,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 							Optional:    true,
 							Computed:    true,
 							Description: "Controller location. Auto-assigned if omitted.",
+							PlanModifiers: []planmodifier.Int64{
+								int64planmodifier.UseStateForUnknown(),
+							},
 						},
 					},
 				},
@@ -234,6 +269,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 							Optional:    true,
 							Computed:    true,
 							Description: "Path to the ISO file.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 						"controller_number": schema.Int64Attribute{
 							Optional:    true,
@@ -245,6 +283,9 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 							Optional:    true,
 							Computed:    true,
 							Description: "Controller location. Auto-assigned if omitted.",
+							PlanModifiers: []planmodifier.Int64{
+								int64planmodifier.UseStateForUnknown(),
+							},
 						},
 					},
 				},
@@ -261,16 +302,25 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 							Optional:    true,
 							Computed:    true,
 							Description: "Name of the virtual switch to connect to.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 						"vlan_id": schema.Int64Attribute{
 							Optional:    true,
 							Computed:    true,
 							Description: "VLAN ID for the adapter.",
+							PlanModifiers: []planmodifier.Int64{
+								int64planmodifier.UseStateForUnknown(),
+							},
 						},
 						"mac_address": schema.StringAttribute{
 							Optional:    true,
 							Computed:    true,
 							Description: "MAC address. Assigned by Hyper-V when the VM starts if dynamic.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
 						},
 						"dynamic_mac_address": schema.BoolAttribute{
 							Optional:    true,
