@@ -56,13 +56,23 @@ provider "hyperv" {
 }
 
 # --- Test 1: MAC address readback (issue #8) ---
+#
+# Hyper-V only assigns a dynamic MAC when the VM starts. For an Off VM,
+# mac_address will be 000000000000 after create — this is correct.
+# After changing state to Running and re-applying, mac_address updates
+# to the real MAC (e.g., 00155DXXXXXX).
+#
+# Test steps:
+#   1. terraform apply                → mac_address = 000000000000 (expected)
+#   2. Change mac_test state to "Running", terraform apply → real MAC
+#   3. Check: terraform output mac_address
 
 resource "hyperv_vm" "mac_test" {
   name                 = "tf-mac-test"
   generation           = 2
   processor_count      = 1
   memory_startup_bytes = 536870912 # 512MB
-  state                = "Off"
+  state                = "Off" # change to "Running" on second apply
 }
 
 resource "hyperv_network_adapter" "mac_test" {
@@ -73,7 +83,7 @@ resource "hyperv_network_adapter" "mac_test" {
 }
 
 output "mac_address" {
-  description = "Should be a real MAC like 00155DXXXXXX, NOT 000000000000"
+  description = "000000000000 when Off; real MAC (e.g. 00155DXXXXXX) after VM starts"
   value       = hyperv_network_adapter.mac_test.mac_address
 }
 

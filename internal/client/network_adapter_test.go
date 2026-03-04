@@ -42,31 +42,9 @@ func newTestClient(ps psExecutor) *WinRMClient {
 	}
 }
 
-func TestCreateNetworkAdapter_MACAssignedAfterRetry(t *testing.T) {
-	mock := &mockPS{
-		jsonResponses: []any{
-			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "000000000000", DynamicMacAddress: true},
-			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "00155D010203", DynamicMacAddress: true},
-		},
-	}
-	c := newTestClient(mock)
-
-	adapter, err := c.CreateNetworkAdapter(context.Background(), AdapterOptions{
-		VMName: "vm1",
-		Name:   "eth0",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if adapter.MacAddress != "00155D010203" {
-		t.Errorf("expected MAC 00155D010203, got %s", adapter.MacAddress)
-	}
-	if mock.runJSONCalls != 2 {
-		t.Errorf("expected 2 RunJSON calls, got %d", mock.runJSONCalls)
-	}
-}
-
-func TestCreateNetworkAdapter_MACAssignedImmediately(t *testing.T) {
+func TestCreateNetworkAdapter_ReturnsReadbackMAC(t *testing.T) {
+	// After creation, GetNetworkAdapter is called once to read back state.
+	// Whatever MAC Hyper-V reports is returned as-is.
 	mock := &mockPS{
 		jsonResponses: []any{
 			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "00155D010203", DynamicMacAddress: true},
@@ -89,13 +67,15 @@ func TestCreateNetworkAdapter_MACAssignedImmediately(t *testing.T) {
 	}
 }
 
-func TestCreateNetworkAdapter_MACNeverAssigned(t *testing.T) {
-	// 1 initial + 10 retries = 11 total
-	responses := make([]any, 11)
-	for i := range responses {
-		responses[i] = NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "000000000000", DynamicMacAddress: true}
+func TestCreateNetworkAdapter_OffVM_ReturnsZeroMAC(t *testing.T) {
+	// Hyper-V only assigns a dynamic MAC when the VM starts.
+	// For an Off VM, 000000000000 is expected — no retry, no error.
+	// The real MAC will appear on the next Read after the VM starts.
+	mock := &mockPS{
+		jsonResponses: []any{
+			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "000000000000", DynamicMacAddress: true},
+		},
 	}
-	mock := &mockPS{jsonResponses: responses}
 	c := newTestClient(mock)
 
 	adapter, err := c.CreateNetworkAdapter(context.Background(), AdapterOptions{
@@ -106,20 +86,19 @@ func TestCreateNetworkAdapter_MACNeverAssigned(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if adapter.MacAddress != "000000000000" {
-		t.Errorf("expected MAC 000000000000, got %s", adapter.MacAddress)
+		t.Errorf("expected MAC 000000000000 for Off VM, got %s", adapter.MacAddress)
 	}
-	if mock.runJSONCalls != 11 {
-		t.Errorf("expected 11 RunJSON calls, got %d", mock.runJSONCalls)
+	// Single read, no retries
+	if mock.runJSONCalls != 1 {
+		t.Errorf("expected 1 RunJSON call (no retry), got %d", mock.runJSONCalls)
 	}
 }
 
-func TestCreateNetworkAdapter_StaticMAC_NoRetry(t *testing.T) {
-	// When a static MAC is provided, no retry should occur even if
-	// the read-back returns 000000000000 (the retry condition uses
-	// opts.MacAddress, not adapter.DynamicMacAddress).
+func TestCreateNetworkAdapter_StaticMAC(t *testing.T) {
+	// When a static MAC is provided, the read-back should reflect it.
 	mock := &mockPS{
 		jsonResponses: []any{
-			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "000000000000", DynamicMacAddress: false},
+			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "AABBCCDDEEFF", DynamicMacAddress: false},
 		},
 	}
 	c := newTestClient(mock)
@@ -132,11 +111,36 @@ func TestCreateNetworkAdapter_StaticMAC_NoRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should return the read-back value without retrying
-	if adapter.MacAddress != "000000000000" {
-		t.Errorf("expected MAC 000000000000 (no retry for static), got %s", adapter.MacAddress)
+	if adapter.MacAddress != "AABBCCDDEEFF" {
+		t.Errorf("expected MAC AABBCCDDEEFF, got %s", adapter.MacAddress)
 	}
 	if mock.runJSONCalls != 1 {
-		t.Errorf("expected 1 RunJSON call (no retry), got %d", mock.runJSONCalls)
+		t.Errorf("expected 1 RunJSON call, got %d", mock.runJSONCalls)
+	}
+}
+
+func TestCreateNetworkAdapter_WithVlan(t *testing.T) {
+	mock := &mockPS{
+		jsonResponses: []any{
+			NetworkAdapter{Name: "eth0", VMName: "vm1", MacAddress: "00155D010203", DynamicMacAddress: true},
+		},
+	}
+	c := newTestClient(mock)
+
+	adapter, err := c.CreateNetworkAdapter(context.Background(), AdapterOptions{
+		VMName:    "vm1",
+		Name:      "eth0",
+		VlanID:    100,
+		VlanIDSet: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 1 Run for Add-VMNetworkAdapter + 1 Run for Set-VMNetworkAdapterVlan + 1 RunJSON for Get
+	if mock.runCalls != 2 {
+		t.Errorf("expected 2 Run calls (create + vlan), got %d", mock.runCalls)
+	}
+	if adapter.MacAddress != "00155D010203" {
+		t.Errorf("expected MAC 00155D010203, got %s", adapter.MacAddress)
 	}
 }
