@@ -41,7 +41,27 @@ func (c *WinRMClient) CreateNetworkAdapter(ctx context.Context, opts AdapterOpti
 		}
 	}
 
-	return c.GetNetworkAdapter(ctx, opts.VMName, opts.Name)
+	adapter, err := c.GetNetworkAdapter(ctx, opts.VMName, opts.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Hyper-V may not assign a dynamic MAC immediately after creation.
+	// Retry the read until the MAC is populated.
+	if adapter.DynamicMacAddress && (adapter.MacAddress == "" || adapter.MacAddress == "000000000000") {
+		for i := 0; i < 5; i++ {
+			time.Sleep(1 * time.Second)
+			adapter, err = c.GetNetworkAdapter(ctx, opts.VMName, opts.Name)
+			if err != nil {
+				return nil, err
+			}
+			if adapter.MacAddress != "" && adapter.MacAddress != "000000000000" {
+				break
+			}
+		}
+	}
+
+	return adapter, nil
 }
 
 func (c *WinRMClient) GetNetworkAdapter(ctx context.Context, vmName, name string) (*NetworkAdapter, error) {
