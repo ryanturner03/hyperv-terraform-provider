@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -102,6 +104,36 @@ func (c *WinRMClient) DeleteNetworkAdapter(ctx context.Context, vmName, name str
 	defer unlock()
 
 	return c.deleteNetworkAdapterNoLock(ctx, vmName, name)
+}
+
+func (c *WinRMClient) ListNetworkAdapters(ctx context.Context, vmName string) ([]NetworkAdapter, error) {
+	cmd := fmt.Sprintf(
+		`Get-VMNetworkAdapter -VMName %s -ErrorAction Stop | ForEach-Object { $adapter = $_; $vlan = Get-VMNetworkAdapterVlan -VMNetworkAdapter $adapter -ErrorAction SilentlyContinue; [PSCustomObject]@{ Name = $adapter.Name; VMName = $adapter.VMName; SwitchName = $adapter.SwitchName; MacAddress = $adapter.MacAddress; DynamicMacAddressEnabled = $adapter.DynamicMacAddressEnabled; VlanID = if ($vlan) { $vlan.AccessVlanId } else { 0 } } } | ConvertTo-Json`,
+		EscapePSString(vmName),
+	)
+	stdout, _, err := c.ps.Run(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("list network adapters on VM %q: %w", vmName, err)
+	}
+	if stdout == "" {
+		return nil, nil
+	}
+
+	// PowerShell ConvertTo-Json returns an object for single items, array for multiple
+	trimmed := strings.TrimSpace(stdout)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var adapters []NetworkAdapter
+		if err := json.Unmarshal([]byte(trimmed), &adapters); err != nil {
+			return nil, fmt.Errorf("unmarshal network adapters: %w", err)
+		}
+		return adapters, nil
+	}
+
+	var adapter NetworkAdapter
+	if err := json.Unmarshal([]byte(trimmed), &adapter); err != nil {
+		return nil, fmt.Errorf("unmarshal network adapter: %w", err)
+	}
+	return []NetworkAdapter{adapter}, nil
 }
 
 func (c *WinRMClient) deleteNetworkAdapterNoLock(ctx context.Context, vmName, name string) error {

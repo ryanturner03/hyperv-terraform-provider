@@ -14,13 +14,15 @@ type mockPS struct {
 	runJSONCalls int
 	// jsonResponses is a queue of objects to marshal and return from RunJSON.
 	jsonResponses []any
+	// runStdout, if set, is returned by Run instead of "".
+	runStdout string
 }
 
 func (m *mockPS) Run(ctx context.Context, command string) (string, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runCalls++
-	return "", "", nil
+	return m.runStdout, "", nil
 }
 
 func (m *mockPS) RunJSON(ctx context.Context, command string, result any) error {
@@ -142,5 +144,61 @@ func TestCreateNetworkAdapter_WithVlan(t *testing.T) {
 	}
 	if adapter.MacAddress != "00155D010203" {
 		t.Errorf("expected MAC 00155D010203, got %s", adapter.MacAddress)
+	}
+}
+
+func TestListNetworkAdapters_SingleAdapter(t *testing.T) {
+	singleJSON := `{"Name":"eth0","VMName":"vm1","SwitchName":"Default Switch","MacAddress":"00155D010203","DynamicMacAddressEnabled":true,"VlanID":0}`
+	mock := &mockPS{runStdout: singleJSON}
+	c := newTestClient(mock)
+
+	adapters, err := c.ListNetworkAdapters(context.Background(), "vm1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(adapters) != 1 {
+		t.Fatalf("expected 1 adapter, got %d", len(adapters))
+	}
+	if adapters[0].Name != "eth0" {
+		t.Errorf("expected name eth0, got %s", adapters[0].Name)
+	}
+	if adapters[0].MacAddress != "00155D010203" {
+		t.Errorf("expected MAC 00155D010203, got %s", adapters[0].MacAddress)
+	}
+}
+
+func TestListNetworkAdapters_MultipleAdapters(t *testing.T) {
+	arrayJSON := `[{"Name":"eth0","VMName":"vm1","SwitchName":"Default Switch","MacAddress":"00155D010203","DynamicMacAddressEnabled":true,"VlanID":0},{"Name":"eth1","VMName":"vm1","SwitchName":"Internal","MacAddress":"00155D040506","DynamicMacAddressEnabled":true,"VlanID":100}]`
+	mock := &mockPS{runStdout: arrayJSON}
+	c := newTestClient(mock)
+
+	adapters, err := c.ListNetworkAdapters(context.Background(), "vm1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(adapters) != 2 {
+		t.Fatalf("expected 2 adapters, got %d", len(adapters))
+	}
+	if adapters[0].Name != "eth0" {
+		t.Errorf("expected first adapter name eth0, got %s", adapters[0].Name)
+	}
+	if adapters[1].Name != "eth1" {
+		t.Errorf("expected second adapter name eth1, got %s", adapters[1].Name)
+	}
+	if adapters[1].VlanID != 100 {
+		t.Errorf("expected second adapter VLAN 100, got %d", adapters[1].VlanID)
+	}
+}
+
+func TestListNetworkAdapters_Empty(t *testing.T) {
+	mock := &mockPS{runStdout: ""}
+	c := newTestClient(mock)
+
+	adapters, err := c.ListNetworkAdapters(context.Background(), "vm1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if adapters != nil {
+		t.Errorf("expected nil adapters for empty output, got %v", adapters)
 	}
 }

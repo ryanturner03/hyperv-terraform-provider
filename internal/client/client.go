@@ -179,6 +179,7 @@ type HyperVClient interface {
 	GetNetworkAdapter(ctx context.Context, vmName, name string) (*NetworkAdapter, error)
 	UpdateNetworkAdapter(ctx context.Context, vmName, name string, opts AdapterOptions) error
 	DeleteNetworkAdapter(ctx context.Context, vmName, name string) error
+	ListNetworkAdapters(ctx context.Context, vmName string) ([]NetworkAdapter, error)
 
 	CreateISO(ctx context.Context, opts ISOOptions) (*ISOInfo, error)
 	GetISO(ctx context.Context, path string) (*ISOInfo, error)

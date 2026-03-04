@@ -54,6 +54,9 @@ type vmResourceModel struct {
 	SecureBootEnabled    types.Bool   `tfsdk:"secure_boot_enabled"`
 	SecureBootTemplate   types.String `tfsdk:"secure_boot_template"`
 	FirstBootDevice      types.Object `tfsdk:"first_boot_device"`
+	HardDrives           types.List   `tfsdk:"hard_drive"`
+	DVDDrives            types.List   `tfsdk:"dvd_drive"`
+	NetworkAdapters      types.List   `tfsdk:"network_adapter"`
 }
 
 func NewVMResource() resource.Resource {
@@ -190,6 +193,95 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 				},
 			},
 		},
+		Blocks: map[string]schema.Block{
+			"hard_drive": schema.ListNestedBlock{
+				Description: "Inline hard drive attached to the VM. Created atomically with the VM.",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"path": schema.StringAttribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Path to the VHD/VHDX file.",
+						},
+						"controller_type": schema.StringAttribute{
+							Optional:    true,
+							Computed:    true,
+							Default:     stringdefault.StaticString("SCSI"),
+							Description: "Controller type: IDE or SCSI (default: SCSI).",
+							Validators: []validator.String{
+								stringvalidator.OneOf("IDE", "SCSI"),
+							},
+						},
+						"controller_number": schema.Int64Attribute{
+							Optional:    true,
+							Computed:    true,
+							Default:     int64default.StaticInt64(0),
+							Description: "Controller number (default: 0).",
+						},
+						"controller_location": schema.Int64Attribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Controller location. Auto-assigned if omitted.",
+						},
+					},
+				},
+			},
+			"dvd_drive": schema.ListNestedBlock{
+				Description: "Inline DVD drive attached to the VM. Created atomically with the VM.",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"path": schema.StringAttribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Path to the ISO file.",
+						},
+						"controller_number": schema.Int64Attribute{
+							Optional:    true,
+							Computed:    true,
+							Default:     int64default.StaticInt64(0),
+							Description: "Controller number (default: 0).",
+						},
+						"controller_location": schema.Int64Attribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Controller location. Auto-assigned if omitted.",
+						},
+					},
+				},
+			},
+			"network_adapter": schema.ListNestedBlock{
+				Description: "Inline network adapter attached to the VM. Created atomically with the VM.",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							Required:    true,
+							Description: "Name of the network adapter.",
+						},
+						"switch_name": schema.StringAttribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Name of the virtual switch to connect to.",
+						},
+						"vlan_id": schema.Int64Attribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "VLAN ID for the adapter.",
+						},
+						"mac_address": schema.StringAttribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "MAC address. Assigned by Hyper-V when the VM starts if dynamic.",
+						},
+						"dynamic_mac_address": schema.BoolAttribute{
+							Optional:    true,
+							Computed:    true,
+							Default:     booldefault.StaticBool(true),
+							Description: "Whether to use a dynamic MAC address (default: true).",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -288,6 +380,60 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 	}
 
+	// Determine if inline blocks are present
+	hasInlineBlocks := !plan.HardDrives.IsNull() || !plan.DVDDrives.IsNull() || !plan.NetworkAdapters.IsNull()
+
+	// Create inline hard drives
+	var createdHardDrives []inlineHardDriveModel
+	if !plan.HardDrives.IsNull() {
+		var planned []inlineHardDriveModel
+		resp.Diagnostics.Append(plan.HardDrives.ElementsAs(ctx, &planned, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		var err error
+		createdHardDrives, err = createInlineHardDrives(ctx, r.client, vmName, planned)
+		if err != nil {
+			_ = r.client.DeleteVM(ctx, vmName)
+			resp.Diagnostics.AddError("Error creating inline hard drive", err.Error())
+			return
+		}
+	}
+
+	// Create inline DVD drives
+	var createdDVDDrives []inlineDVDDriveModel
+	if !plan.DVDDrives.IsNull() {
+		var planned []inlineDVDDriveModel
+		resp.Diagnostics.Append(plan.DVDDrives.ElementsAs(ctx, &planned, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		var err error
+		createdDVDDrives, err = createInlineDVDDrives(ctx, r.client, vmName, planned)
+		if err != nil {
+			_ = r.client.DeleteVM(ctx, vmName)
+			resp.Diagnostics.AddError("Error creating inline DVD drive", err.Error())
+			return
+		}
+	}
+
+	// Create inline network adapters
+	var createdNetworkAdapters []inlineNetworkAdapterModel
+	if !plan.NetworkAdapters.IsNull() {
+		var planned []inlineNetworkAdapterModel
+		resp.Diagnostics.Append(plan.NetworkAdapters.ElementsAs(ctx, &planned, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		var err error
+		createdNetworkAdapters, err = createInlineNetworkAdapters(ctx, r.client, vmName, planned)
+		if err != nil {
+			_ = r.client.DeleteVM(ctx, vmName)
+			resp.Diagnostics.AddError("Error creating inline network adapter", err.Error())
+			return
+		}
+	}
+
 	// Set first boot device if configured (Gen 2 only)
 	bootDeviceDeferred := false
 	if isGen2 && !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown() {
@@ -321,7 +467,8 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 
 	// Warn when starting during Create — drives likely aren't attached yet
-	if plan.State.ValueString() == "Running" {
+	// Suppress the warning when inline blocks are present (drives are already attached)
+	if plan.State.ValueString() == "Running" && !hasInlineBlocks {
 		resp.Diagnostics.AddWarning(
 			"VM starting before drives may be attached",
 			"Drives managed as separate resources may not exist yet. "+
@@ -358,6 +505,42 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 	}
 
+	// Read back inline sub-resources from server (not from create results)
+	// to capture computed fields that may change after VM start (e.g., MAC address)
+	if createdHardDrives != nil {
+		drives, err := r.client.ListHardDrives(ctx, vmName)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline hard drives", err.Error())
+			plan.HardDrives = hardDrivesToList(ctx, createdHardDrives, &resp.Diagnostics)
+		} else {
+			plan.HardDrives = hardDrivesToList(ctx, hardDrivesFromClient(drives), &resp.Diagnostics)
+		}
+	} else {
+		plan.HardDrives = hardDrivesToList(ctx, nil, &resp.Diagnostics)
+	}
+	if createdDVDDrives != nil {
+		drives, err := r.client.ListDVDDrives(ctx, vmName)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline DVD drives", err.Error())
+			plan.DVDDrives = dvdDrivesToList(ctx, createdDVDDrives, &resp.Diagnostics)
+		} else {
+			plan.DVDDrives = dvdDrivesToList(ctx, dvdDrivesFromClient(drives), &resp.Diagnostics)
+		}
+	} else {
+		plan.DVDDrives = dvdDrivesToList(ctx, nil, &resp.Diagnostics)
+	}
+	if createdNetworkAdapters != nil {
+		adapters, err := r.client.ListNetworkAdapters(ctx, vmName)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline network adapters", err.Error())
+			plan.NetworkAdapters = networkAdaptersToList(ctx, createdNetworkAdapters, &resp.Diagnostics)
+		} else {
+			plan.NetworkAdapters = networkAdaptersToList(ctx, networkAdaptersFromClient(adapters), &resp.Diagnostics)
+		}
+	} else {
+		plan.NetworkAdapters = networkAdaptersToList(ctx, nil, &resp.Diagnostics)
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -388,6 +571,33 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 		state.SecureBootEnabled = types.BoolNull()
 		state.SecureBootTemplate = types.StringNull()
 		state.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+	}
+
+	// Read back inline sub-resources only if state has non-null lists
+	// (prevents absorbing drives from standalone resources)
+	if !state.HardDrives.IsNull() {
+		drives, err := r.client.ListHardDrives(ctx, vm.Name)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline hard drives", err.Error())
+		} else {
+			state.HardDrives = hardDrivesToList(ctx, hardDrivesFromClient(drives), &resp.Diagnostics)
+		}
+	}
+	if !state.DVDDrives.IsNull() {
+		drives, err := r.client.ListDVDDrives(ctx, vm.Name)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline DVD drives", err.Error())
+		} else {
+			state.DVDDrives = dvdDrivesToList(ctx, dvdDrivesFromClient(drives), &resp.Diagnostics)
+		}
+	}
+	if !state.NetworkAdapters.IsNull() {
+		adapters, err := r.client.ListNetworkAdapters(ctx, vm.Name)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline network adapters", err.Error())
+		} else {
+			state.NetworkAdapters = networkAdaptersToList(ctx, networkAdaptersFromClient(adapters), &resp.Diagnostics)
+		}
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -422,16 +632,15 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	plannedState := plan.State.ValueString()
 	currentState := state.State.ValueString()
 
-	// Firmware and first boot device changes require the VM to be off.
-	// If the VM is running, stop it before making config changes, then
-	// restart it afterward if the planned state is still "Running".
+	// Firmware, first boot device, and inline block changes may require the VM to be off.
 	needsFirmware := isGen2 && r.buildFirmwareOpts(plan) != nil
 	needsBootDevice := isGen2 && !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown()
+	needsInlineChanges := !plan.HardDrives.IsNull() || !plan.DVDDrives.IsNull() || !plan.NetworkAdapters.IsNull()
 	stoppedForConfig := false
 
-	if currentState == "Running" && (needsFirmware || needsBootDevice) {
+	if currentState == "Running" && (needsFirmware || needsBootDevice || needsInlineChanges) {
 		if err := r.client.SetVMState(ctx, name, client.VMStateOff); err != nil {
-			resp.Diagnostics.AddError("Error stopping VM for firmware changes", err.Error())
+			resp.Diagnostics.AddError("Error stopping VM for config changes", err.Error())
 			return
 		}
 		stoppedForConfig = true
@@ -441,6 +650,58 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating VM", err.Error())
 		return
+	}
+
+	// Diff and apply inline sub-resources
+	if !plan.HardDrives.IsNull() || !state.HardDrives.IsNull() {
+		var oldDrives, newDrives []inlineHardDriveModel
+		if !state.HardDrives.IsNull() {
+			resp.Diagnostics.Append(state.HardDrives.ElementsAs(ctx, &oldDrives, false)...)
+		}
+		if !plan.HardDrives.IsNull() {
+			resp.Diagnostics.Append(plan.HardDrives.ElementsAs(ctx, &newDrives, false)...)
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if err := diffAndApplyHardDrives(ctx, r.client, name, oldDrives, newDrives); err != nil {
+			resp.Diagnostics.AddError("Error updating inline hard drives", err.Error())
+			return
+		}
+	}
+
+	if !plan.DVDDrives.IsNull() || !state.DVDDrives.IsNull() {
+		var oldDrives, newDrives []inlineDVDDriveModel
+		if !state.DVDDrives.IsNull() {
+			resp.Diagnostics.Append(state.DVDDrives.ElementsAs(ctx, &oldDrives, false)...)
+		}
+		if !plan.DVDDrives.IsNull() {
+			resp.Diagnostics.Append(plan.DVDDrives.ElementsAs(ctx, &newDrives, false)...)
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if err := diffAndApplyDVDDrives(ctx, r.client, name, oldDrives, newDrives); err != nil {
+			resp.Diagnostics.AddError("Error updating inline DVD drives", err.Error())
+			return
+		}
+	}
+
+	if !plan.NetworkAdapters.IsNull() || !state.NetworkAdapters.IsNull() {
+		var oldAdapters, newAdapters []inlineNetworkAdapterModel
+		if !state.NetworkAdapters.IsNull() {
+			resp.Diagnostics.Append(state.NetworkAdapters.ElementsAs(ctx, &oldAdapters, false)...)
+		}
+		if !plan.NetworkAdapters.IsNull() {
+			resp.Diagnostics.Append(plan.NetworkAdapters.ElementsAs(ctx, &newAdapters, false)...)
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if err := diffAndApplyNetworkAdapters(ctx, r.client, name, oldAdapters, newAdapters); err != nil {
+			resp.Diagnostics.AddError("Error updating inline network adapters", err.Error())
+			return
+		}
 	}
 
 	// Configure firmware for Gen 2 VMs
@@ -498,6 +759,32 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		plan.SecureBootEnabled = types.BoolNull()
 		plan.SecureBootTemplate = types.StringNull()
 		plan.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+	}
+
+	// Read back inline sub-resources into state
+	if !plan.HardDrives.IsNull() {
+		drives, err := r.client.ListHardDrives(ctx, name)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline hard drives", err.Error())
+		} else {
+			plan.HardDrives = hardDrivesToList(ctx, hardDrivesFromClient(drives), &resp.Diagnostics)
+		}
+	}
+	if !plan.DVDDrives.IsNull() {
+		drives, err := r.client.ListDVDDrives(ctx, name)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline DVD drives", err.Error())
+		} else {
+			plan.DVDDrives = dvdDrivesToList(ctx, dvdDrivesFromClient(drives), &resp.Diagnostics)
+		}
+	}
+	if !plan.NetworkAdapters.IsNull() {
+		adapters, err := r.client.ListNetworkAdapters(ctx, name)
+		if err != nil {
+			resp.Diagnostics.AddWarning("Error reading inline network adapters", err.Error())
+		} else {
+			plan.NetworkAdapters = networkAdaptersToList(ctx, networkAdaptersFromClient(adapters), &resp.Diagnostics)
+		}
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
