@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// mockPS implements psExecutor with configurable responses.
+// mockPS implements PSExecutor with configurable responses.
 type mockPS struct {
 	mu           sync.Mutex
 	runCalls     int
@@ -37,7 +37,7 @@ func (m *mockPS) RunJSON(ctx context.Context, command string, result any) error 
 	return json.Unmarshal(data, result)
 }
 
-func newTestClient(ps psExecutor) *WinRMClient {
+func newTestClient(ps PSExecutor) *WinRMClient {
 	return &WinRMClient{
 		ps:   ps,
 		vmMu: make(map[string]*sync.Mutex),

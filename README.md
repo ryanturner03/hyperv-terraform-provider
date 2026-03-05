@@ -5,13 +5,14 @@ A Terraform provider for managing Hyper-V resources (VMs, VHDs, virtual switches
 ## Features
 
 - **Virtual Machines** - Create, configure, and manage VM lifecycle including power state, processors, memory (static or dynamic), and checkpoints
+- **Inline Resource Blocks** - Define hard drives, DVD drives, and network adapters directly inside the VM resource for atomic creation and simpler configs
 - **Virtual Hard Disks** - Create Dynamic, Fixed, or Differencing VHDs/VHDXs
-- **Hard Drives** - Attach VHD/VHDX disks to VMs on IDE or SCSI controllers
+- **Hard Drives** - Attach VHD/VHDX disks to VMs on IDE or SCSI controllers (standalone or inline)
 - **ISO Images** - Create ISO 9660 images (e.g., cloud-init seed ISOs) via IMAPI2
-- **DVD Drives** - Mount ISO images in VM DVD drives
+- **DVD Drives** - Mount ISO images in VM DVD drives (standalone or inline)
 - **Virtual Switches** - Create External, Internal, or Private virtual switches
-- **Network Adapters** - Attach and configure VM network adapters with VLAN support
-- **Guest Initialization** - Deploy Linux (cloud-init) and Windows (cloudbase-init) VMs with static IP configuration via [NoCloud seed ISOs](docs/cloud-init.md)
+- **Network Adapters** - Attach and configure VM network adapters with VLAN support (standalone or inline)
+- **Guest Initialization** - Deploy Linux (cloud-init) and Windows (cloudbase-init) VMs with automatic configuration via [NoCloud seed ISOs](docs/cloud-init.md)
 - **Data Sources** - Read-only lookup for all resource types
 - **Multi-Host** - Manage resources across multiple Hyper-V hosts using provider aliases
 - **Authentication** - Kerberos, NTLM, and Basic auth over WinRM (HTTP or HTTPS)
@@ -38,6 +39,10 @@ Restart-Service WinRM
 
 ## Usage
 
+### Inline Blocks (Recommended)
+
+Define drives and network adapters directly inside the VM resource. The VM and all sub-resources are created atomically — if anything fails, the entire VM is cleaned up (no orphans).
+
 ```hcl
 terraform {
   required_providers {
@@ -61,9 +66,10 @@ variable "hyperv_password" {
   sensitive = true
 }
 
-resource "hyperv_virtual_switch" "internal" {
-  name = "InternalSwitch"
-  type = "Internal"
+resource "hyperv_vhd" "os" {
+  path        = "C:\\VMs\\web-server\\os.vhdx"
+  type        = "Differencing"
+  parent_path = "C:\\VMs\\base-images\\ubuntu-2404-gen2.vhdx"
 }
 
 resource "hyperv_vm" "web" {
@@ -71,22 +77,60 @@ resource "hyperv_vm" "web" {
   generation           = 2
   processor_count      = 4
   memory_startup_bytes = 4294967296 # 4GB
-  dynamic_memory       = true
-  memory_minimum_bytes = 2147483648 # 2GB
-  memory_maximum_bytes = 8589934592 # 8GB
+  secure_boot_enabled  = false      # Required for Linux
+  state                = "Running"
+
+  first_boot_device = {
+    device_type         = "HardDiskDrive"
+    controller_number   = 0
+    controller_location = 0
+  }
+
+  hard_drive {
+    path                = hyperv_vhd.os.path
+    controller_type     = "SCSI"
+    controller_number   = 0
+    controller_location = 0
+  }
+
+  network_adapter {
+    name        = "Network Adapter"
+    switch_name = "Default Switch"
+  }
+}
+```
+
+### Standalone Resources
+
+Drives and adapters can also be managed as separate resources for more granular control:
+
+```hcl
+resource "hyperv_vm" "web" {
+  name                 = "web-server"
+  generation           = 2
+  processor_count      = 4
+  memory_startup_bytes = 4294967296 # 4GB
   state                = "Off"
 }
 
-resource "hyperv_vhd" "os_disk" {
+resource "hyperv_vhd" "os" {
   path       = "C:\\VMs\\web-server\\os.vhdx"
   size_bytes = 53687091200 # 50GB
   type       = "Dynamic"
 }
 
+resource "hyperv_hard_drive" "os" {
+  vm_name             = hyperv_vm.web.name
+  controller_type     = "SCSI"
+  controller_number   = 0
+  controller_location = 0
+  path                = hyperv_vhd.os.path
+}
+
 resource "hyperv_network_adapter" "web_nic" {
   name        = "Primary"
   vm_name     = hyperv_vm.web.name
-  switch_name = hyperv_virtual_switch.internal.name
+  switch_name = "Default Switch"
 }
 ```
 

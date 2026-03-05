@@ -22,5 +22,8 @@ packer_cache/
 # OS
 .DS_Store
 
+# Environment
+.env
+
 # Claude Code local settings
 .claude/settings.local.json

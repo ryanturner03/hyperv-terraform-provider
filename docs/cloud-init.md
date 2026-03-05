@@ -61,40 +61,10 @@ The `NetworkConfigPlugin` is required for static IP assignment. Without it, clou
 ### Linux — Gen 2 with Static IP
 
 ```hcl
-resource "hyperv_vm" "linux" {
-  name                 = "my-linux-server"
-  generation           = 2
-  processor_count      = 4
-  memory_startup_bytes = 2147483648  # 2GB
-  dynamic_memory       = false
-  state                = "Off"
-  secure_boot_enabled  = false  # Linux needs Secure Boot off
-
-  first_boot_device = {
-    device_type         = "HardDiskDrive"
-    controller_number   = 0
-    controller_location = 0
-  }
-}
-
 resource "hyperv_vhd" "linux_os" {
   path        = "C:\\VMs\\my-linux-server\\os.vhdx"
   type        = "Differencing"
   parent_path = "C:\\VMs\\base-images\\ubuntu-2404-gen2.vhdx"
-}
-
-resource "hyperv_hard_drive" "linux_os" {
-  vm_name             = hyperv_vm.linux.name
-  controller_type     = "SCSI"
-  controller_number   = 0
-  controller_location = 0
-  path                = hyperv_vhd.linux_os.path
-}
-
-resource "hyperv_network_adapter" "linux_nic" {
-  name        = "Primary"
-  vm_name     = hyperv_vm.linux.name
-  switch_name = "LAN"
 }
 
 resource "hyperv_iso" "linux_seed" {
@@ -131,52 +101,48 @@ resource "hyperv_iso" "linux_seed" {
   }
 }
 
-resource "hyperv_dvd_drive" "linux_seed" {
-  vm_name             = hyperv_vm.linux.name
-  controller_number   = 0
-  controller_location = 1
-  path                = hyperv_iso.linux_seed.path
-}
-```
-
-### Windows — Gen 2 with Static IP
-
-```hcl
-resource "hyperv_vm" "windows" {
-  name                 = "my-windows-server"
+resource "hyperv_vm" "linux" {
+  name                 = "my-linux-server"
   generation           = 2
   processor_count      = 4
-  memory_startup_bytes = 4294967296  # 4GB
+  memory_startup_bytes = 2147483648  # 2GB
   dynamic_memory       = false
-  state                = "Off"
-  secure_boot_enabled  = true
-  secure_boot_template = "MicrosoftWindows"
+  state                = "Running"
+  secure_boot_enabled  = false  # Required for Linux
 
   first_boot_device = {
     device_type         = "HardDiskDrive"
     controller_number   = 0
     controller_location = 0
   }
-}
 
+  hard_drive {
+    path                = hyperv_vhd.linux_os.path
+    controller_type     = "SCSI"
+    controller_number   = 0
+    controller_location = 0
+  }
+
+  dvd_drive {
+    path                = hyperv_iso.linux_seed.path
+    controller_number   = 0
+    controller_location = 1
+  }
+
+  network_adapter {
+    name        = "Network Adapter"
+    switch_name = "LAN"
+  }
+}
+```
+
+### Windows — Gen 2 with Static IP
+
+```hcl
 resource "hyperv_vhd" "windows_os" {
   path        = "C:\\VMs\\my-windows-server\\os.vhdx"
   type        = "Differencing"
   parent_path = "C:\\VMs\\base-images\\windows-server-2022-gen2.vhdx"
-}
-
-resource "hyperv_hard_drive" "windows_os" {
-  vm_name             = hyperv_vm.windows.name
-  controller_type     = "SCSI"
-  controller_number   = 0
-  controller_location = 0
-  path                = hyperv_vhd.windows_os.path
-}
-
-resource "hyperv_network_adapter" "windows_nic" {
-  name        = "Primary"
-  vm_name     = hyperv_vm.windows.name
-  switch_name = "LAN"
 }
 
 resource "hyperv_iso" "windows_seed" {
@@ -188,9 +154,13 @@ resource "hyperv_iso" "windows_seed" {
       local-hostname: my-windows-server
     EOF
     "user-data" = <<-EOF
-      #ps1_sysnative
-      # cloudbase-init executes this as a PowerShell script
-      Write-Output "cloudbase-init user-data executed"
+      #cloud-config
+      set_hostname: my-windows-server
+      users:
+        - name: Administrator
+          passwd: YourSecurePassword123
+      runcmd:
+        - powershell -Command "Write-Output 'cloudbase-init complete'"
     EOF
     "network-config" = <<-EOF
       version: 2
@@ -209,11 +179,38 @@ resource "hyperv_iso" "windows_seed" {
   }
 }
 
-resource "hyperv_dvd_drive" "windows_seed" {
-  vm_name             = hyperv_vm.windows.name
-  controller_number   = 0
-  controller_location = 1
-  path                = hyperv_iso.windows_seed.path
+resource "hyperv_vm" "windows" {
+  name                 = "my-windows-server"
+  generation           = 2
+  processor_count      = 4
+  memory_startup_bytes = 4294967296  # 4GB
+  dynamic_memory       = false
+  state                = "Running"
+  secure_boot_enabled  = true
+
+  first_boot_device = {
+    device_type         = "HardDiskDrive"
+    controller_number   = 0
+    controller_location = 0
+  }
+
+  hard_drive {
+    path                = hyperv_vhd.windows_os.path
+    controller_type     = "SCSI"
+    controller_number   = 0
+    controller_location = 0
+  }
+
+  dvd_drive {
+    path                = hyperv_iso.windows_seed.path
+    controller_number   = 0
+    controller_location = 1
+  }
+
+  network_adapter {
+    name        = "Network Adapter"
+    switch_name = "LAN"
+  }
 }
 ```
 
@@ -326,7 +323,10 @@ The `hyperv_iso` resource creates the seed ISO. For the guest agent to detect it
 | OS | Format | Example |
 |----|--------|---------|
 | Linux | cloud-config YAML | Must start with `#cloud-config` |
-| Windows | PowerShell script | Must start with `#ps1_sysnative` |
+| Windows | cloud-config YAML | Must start with `#cloud-config` — uses `set_hostname`, `users`, `runcmd` plugins |
+| Windows (alt) | PowerShell script | Start with `#ps1_sysnative` for raw PowerShell execution |
+
+> **Recommended:** Use `#cloud-config` YAML for both Linux and Windows. The `#ps1_sysnative` format works but bypasses cloudbase-init's plugin system (hostname, user management, etc.).
 
 ### network-config format
 

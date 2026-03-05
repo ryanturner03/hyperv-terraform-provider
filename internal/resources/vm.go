@@ -418,18 +418,6 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	vmName := vm.Name
 	isGen2 := vm.Generation == 2
 
-	// Configure firmware for Gen 2 VMs (secure boot + template, no drive dependency)
-	if isGen2 {
-		fwOpts := r.buildFirmwareOpts(plan)
-		if fwOpts != nil {
-			if err := r.client.SetVMFirmware(ctx, vmName, *fwOpts); err != nil {
-				_ = r.client.DeleteVM(ctx, vmName)
-				resp.Diagnostics.AddError("Error configuring VM firmware", err.Error())
-				return
-			}
-		}
-	}
-
 	// Determine if inline blocks are present
 	hasInlineBlocks := !plan.HardDrives.IsNull() || !plan.DVDDrives.IsNull() || !plan.NetworkAdapters.IsNull()
 
@@ -484,34 +472,53 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 	}
 
-	// Set first boot device if configured (Gen 2 only)
-	bootDeviceDeferred := false
-	if isGen2 && !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown() {
-		var fbd firstBootDeviceModel
-		resp.Diagnostics.Append(plan.FirstBootDevice.As(ctx, &fbd, basetypes.ObjectAsOptions{})...)
-		if resp.Diagnostics.HasError() {
-			return
+	// Configure firmware for Gen 2 VMs (secure boot, template, first boot device).
+	// Everything goes in a single Set-VMFirmware call to avoid the problem where
+	// separate invocations reset each other's settings.
+	if isGen2 {
+		fwOpts := r.buildFirmwareOpts(plan)
+		if fwOpts == nil {
+			fwOpts = &client.VMFirmwareOptions{}
 		}
 
-		device := client.BootDevice{
-			DeviceType:         fbd.DeviceType.ValueString(),
-			ControllerNumber:   int(fbd.ControllerNumber.ValueInt64()),
-			ControllerLocation: int(fbd.ControllerLocation.ValueInt64()),
-		}
-		if err := r.client.SetVMFirstBootDevice(ctx, vmName, device); err != nil {
-			if strings.Contains(err.Error(), "not attached yet") {
-				bootDeviceDeferred = true
-				resp.Diagnostics.AddWarning(
-					"First boot device not set — drive not attached yet",
-					fmt.Sprintf("The drive at controller %d:%d does not exist on the VM yet. "+
-						"This is expected when drive resources are created separately. "+
-						"The boot device will be configured on the next terraform apply after drives are attached.",
-						device.ControllerNumber, device.ControllerLocation),
-				)
-			} else {
-				_ = r.client.DeleteVM(ctx, vmName)
-				resp.Diagnostics.AddError("Error setting first boot device", err.Error())
+		if !plan.FirstBootDevice.IsNull() && !plan.FirstBootDevice.IsUnknown() {
+			var fbd firstBootDeviceModel
+			resp.Diagnostics.Append(plan.FirstBootDevice.As(ctx, &fbd, basetypes.ObjectAsOptions{})...)
+			if resp.Diagnostics.HasError() {
 				return
+			}
+			fwOpts.FirstBootDevice = &client.BootDevice{
+				DeviceType:         fbd.DeviceType.ValueString(),
+				ControllerNumber:   int(fbd.ControllerNumber.ValueInt64()),
+				ControllerLocation: int(fbd.ControllerLocation.ValueInt64()),
+			}
+		}
+
+		if fwOpts.SecureBootEnabled != nil || fwOpts.SecureBootTemplate != "" || fwOpts.FirstBootDevice != nil {
+			if err := r.client.SetVMFirmware(ctx, vmName, *fwOpts); err != nil {
+				if fwOpts.FirstBootDevice != nil && strings.Contains(err.Error(), "not attached yet") {
+					d := fwOpts.FirstBootDevice
+					resp.Diagnostics.AddWarning(
+						"First boot device not set — drive not attached yet",
+						fmt.Sprintf("The drive at controller %d:%d does not exist on the VM yet. "+
+							"This is expected when drive resources are created separately. "+
+							"The boot device will be configured on the next terraform apply after drives are attached.",
+							d.ControllerNumber, d.ControllerLocation),
+					)
+					// Retry without the boot device so secure boot still gets set
+					fwOpts.FirstBootDevice = nil
+					if fwOpts.SecureBootEnabled != nil || fwOpts.SecureBootTemplate != "" {
+						if err2 := r.client.SetVMFirmware(ctx, vmName, *fwOpts); err2 != nil {
+							_ = r.client.DeleteVM(ctx, vmName)
+							resp.Diagnostics.AddError("Error configuring VM firmware", err2.Error())
+							return
+						}
+					}
+				} else {
+					_ = r.client.DeleteVM(ctx, vmName)
+					resp.Diagnostics.AddError("Error configuring VM firmware", err.Error())
+					return
+				}
 			}
 		}
 	}
@@ -547,10 +554,10 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	if isGen2 {
 		plannedFBD := plan.FirstBootDevice
 		r.readFirmwareState(ctx, vmName, &plan, &resp.Diagnostics)
-		// When the boot device was deferred (drive not attached yet),
-		// preserve the planned value so Terraform doesn't see a
-		// null vs. configured mismatch ("inconsistent result after apply").
-		if bootDeviceDeferred {
+		// Preserve the planned first_boot_device value. We just set it via
+		// SetVMFirmware, so we know it's correct. The read-back can return
+		// Unknown/null due to WinRM deserialization issues with type detection.
+		if !plannedFBD.IsNull() {
 			plan.FirstBootDevice = plannedFBD
 		}
 	}
@@ -616,7 +623,13 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 	mapVMToState(vm, &state, &resp.Diagnostics)
 
 	if vm.Generation == 2 {
+		priorFBD := state.FirstBootDevice
 		r.readFirmwareState(ctx, vm.Name, &state, &resp.Diagnostics)
+		// If the read-back couldn't determine the boot device type (WinRM
+		// deserialization drops type info), preserve the prior state value.
+		if state.FirstBootDevice.IsNull() && !priorFBD.IsNull() {
+			state.FirstBootDevice = priorFBD
+		}
 	} else {
 		state.SecureBootEnabled = types.BoolNull()
 		state.SecureBootTemplate = types.StringNull()
@@ -754,34 +767,29 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		}
 	}
 
-	// Configure firmware for Gen 2 VMs
-	if needsFirmware {
+	// Configure firmware for Gen 2 VMs (secure boot, template, first boot device)
+	// in a single Set-VMFirmware call to avoid settings resetting each other.
+	if needsFirmware || needsBootDevice {
 		fwOpts := r.buildFirmwareOpts(plan)
+		if fwOpts == nil {
+			fwOpts = &client.VMFirmwareOptions{}
+		}
+
+		if needsBootDevice {
+			var fbd firstBootDeviceModel
+			resp.Diagnostics.Append(plan.FirstBootDevice.As(ctx, &fbd, basetypes.ObjectAsOptions{})...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			fwOpts.FirstBootDevice = &client.BootDevice{
+				DeviceType:         fbd.DeviceType.ValueString(),
+				ControllerNumber:   int(fbd.ControllerNumber.ValueInt64()),
+				ControllerLocation: int(fbd.ControllerLocation.ValueInt64()),
+			}
+		}
+
 		if err := r.client.SetVMFirmware(ctx, name, *fwOpts); err != nil {
 			resp.Diagnostics.AddError("Error configuring VM firmware", err.Error())
-			return
-		}
-	}
-
-	// Set first boot device if configured (Gen 2 only)
-	if needsBootDevice {
-		var fbd firstBootDeviceModel
-		resp.Diagnostics.Append(plan.FirstBootDevice.As(ctx, &fbd, basetypes.ObjectAsOptions{})...)
-		if resp.Diagnostics.HasError() {
-			return
-		}
-
-		device := client.BootDevice{
-			DeviceType:         fbd.DeviceType.ValueString(),
-			ControllerNumber:   int(fbd.ControllerNumber.ValueInt64()),
-			ControllerLocation: int(fbd.ControllerLocation.ValueInt64()),
-		}
-		if err := r.client.SetVMFirstBootDevice(ctx, name, device); err != nil {
-			resp.Diagnostics.AddError(
-				"Error setting first boot device",
-				fmt.Sprintf("Drive at controller %d:%d not attached yet. Ensure drive resources are created first, or create the VM with state = \"Off\" and update to \"Running\" after drives exist. Detail: %s",
-					device.ControllerNumber, device.ControllerLocation, err.Error()),
-			)
 			return
 		}
 	}

@@ -7,7 +7,42 @@ import (
 )
 
 func buildSetVMFirmwareCommand(name string, opts VMFirmwareOptions) string {
-	cmd := fmt.Sprintf("Set-VMFirmware -VMName %s", EscapePSString(name))
+	vmEsc := EscapePSString(name)
+
+	// When a first boot device is specified, look it up first so we can
+	// pass it to the same Set-VMFirmware call.  Combining everything into
+	// a single call avoids the problem where separate Set-VMFirmware
+	// invocations reset each other's settings (e.g. setting Secure Boot
+	// resets the boot order and vice-versa).
+	var prefix string
+	if opts.FirstBootDevice != nil {
+		d := opts.FirstBootDevice
+		switch d.DeviceType {
+		case "HardDiskDrive":
+			prefix = fmt.Sprintf(
+				"$dev = Get-VMHardDiskDrive -VMName %s | Where-Object { $_.ControllerNumber -eq %d -and $_.ControllerLocation -eq %d }; ",
+				vmEsc, d.ControllerNumber, d.ControllerLocation)
+		case "DvdDrive":
+			prefix = fmt.Sprintf(
+				"$dev = Get-VMDvdDrive -VMName %s | Where-Object { $_.ControllerNumber -eq %d -and $_.ControllerLocation -eq %d }; ",
+				vmEsc, d.ControllerNumber, d.ControllerLocation)
+		case "NetworkAdapter":
+			prefix = fmt.Sprintf(
+				"$dev = Get-VMNetworkAdapter -VMName %s; ", vmEsc)
+		default:
+			prefix = fmt.Sprintf(
+				"$dev = Get-VMHardDiskDrive -VMName %s | Where-Object { $_.ControllerNumber -eq %d -and $_.ControllerLocation -eq %d }; ",
+				vmEsc, d.ControllerNumber, d.ControllerLocation)
+		}
+		prefix += fmt.Sprintf(
+			"if (-not $dev) { throw 'drive at controller %d:%d not attached yet - ensure drive resources are created first, or create VM with state=Off and update to Running after drives exist' }; ",
+			d.ControllerNumber, d.ControllerLocation)
+	}
+
+	cmd := fmt.Sprintf("Set-VMFirmware -VMName %s", vmEsc)
+	if opts.FirstBootDevice != nil {
+		cmd += " -FirstBootDevice $dev"
+	}
 	if opts.SecureBootEnabled != nil {
 		if *opts.SecureBootEnabled {
 			cmd += " -EnableSecureBoot On"
@@ -19,7 +54,7 @@ func buildSetVMFirmwareCommand(name string, opts VMFirmwareOptions) string {
 		cmd += fmt.Sprintf(" -SecureBootTemplate %s", EscapePSString(opts.SecureBootTemplate))
 	}
 	cmd += " -ErrorAction Stop"
-	return cmd
+	return prefix + cmd
 }
 
 func buildSetVMFirstBootDeviceCommand(name string, device BootDevice) string {
@@ -51,21 +86,28 @@ func buildSetVMFirstBootDeviceCommand(name string, device BootDevice) string {
 
 func buildGetVMFirmwareCommand(name string) string {
 	vmEsc := EscapePSString(name)
+	// Determine the first boot device by matching the BootOrder entry against
+	// the VM's drives and adapters. We avoid -is type checks because objects
+	// are deserialized over WinRM (Deserialized.X doesn't match X).
 	return fmt.Sprintf(`$fw = Get-VMFirmware -VMName %s -ErrorAction Stop; `+
 		`$fbd = $fw.BootOrder | Select-Object -First 1; `+
 		`$fbdType = 'Unknown'; $fbdCN = 0; $fbdCL = 0; `+
 		`if ($fbd -and $fbd.Device) { `+
-		`if ($fbd.Device -is [Microsoft.HyperV.PowerShell.HardDiskDrive]) { $fbdType = 'HardDiskDrive'; $fbdCN = $fbd.Device.ControllerNumber; $fbdCL = $fbd.Device.ControllerLocation } `+
-		`elseif ($fbd.Device -is [Microsoft.HyperV.PowerShell.DvdDrive]) { $fbdType = 'DvdDrive'; $fbdCN = $fbd.Device.ControllerNumber; $fbdCL = $fbd.Device.ControllerLocation } `+
-		`elseif ($fbd.Device -is [Microsoft.HyperV.PowerShell.VMNetworkAdapter]) { $fbdType = 'NetworkAdapter' } `+
+		`$d = $fbd.Device; `+
+		`$hdds = @(Get-VMHardDiskDrive -VMName %s -ErrorAction SilentlyContinue); `+
+		`$dvds = @(Get-VMDvdDrive -VMName %s -ErrorAction SilentlyContinue); `+
+		`$matched = $false; `+
+		`foreach ($h in $hdds) { if ($h.Id -eq $d.Id) { $fbdType = 'HardDiskDrive'; $fbdCN = $h.ControllerNumber; $fbdCL = $h.ControllerLocation; $matched = $true; break } }; `+
+		`if (-not $matched) { foreach ($dv in $dvds) { if ($dv.Id -eq $d.Id) { $fbdType = 'DvdDrive'; $fbdCN = $dv.ControllerNumber; $fbdCL = $dv.ControllerLocation; $matched = $true; break } } }; `+
+		`if (-not $matched -and $d.PSObject.Properties['SwitchName']) { $fbdType = 'NetworkAdapter' } `+
 		`}; `+
 		`[PSCustomObject]@{ `+
-		`SecureBootEnabled = if ($fw.SecureBoot -eq 'On' -or $fw.SecureBoot -eq 1) { 'On' } else { 'Off' }; `+
+		`SecureBootEnabled = $fw.SecureBoot.ToString(); `+
 		`SecureBootTemplate = $fw.SecureBootTemplate; `+
 		`FirstBootDeviceType = $fbdType; `+
 		`FirstBootDeviceControllerNumber = $fbdCN; `+
 		`FirstBootDeviceControllerLocation = $fbdCL `+
-		`} | ConvertTo-Json`, vmEsc)
+		`} | ConvertTo-Json`, vmEsc, vmEsc, vmEsc)
 }
 
 func (c *WinRMClient) SetVMFirmware(ctx context.Context, name string, opts VMFirmwareOptions) error {

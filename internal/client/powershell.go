@@ -9,8 +9,8 @@ import (
 	"github.com/masterzen/winrm"
 )
 
-// psExecutor abstracts PowerShell command execution for testing.
-type psExecutor interface {
+// PSExecutor abstracts PowerShell command execution for testing.
+type PSExecutor interface {
 	Run(ctx context.Context, command string) (string, string, error)
 	RunJSON(ctx context.Context, command string, result any) error
 }

@@ -56,7 +56,10 @@ func (m *mockHyperVClient) SetVMState(ctx context.Context, name string, state cl
 	return m.setVMStateFn(ctx, name, state)
 }
 func (m *mockHyperVClient) SetVMFirmware(ctx context.Context, name string, opts client.VMFirmwareOptions) error {
-	return m.setVMFirmwareFn(ctx, name, opts)
+	if m.setVMFirmwareFn != nil {
+		return m.setVMFirmwareFn(ctx, name, opts)
+	}
+	return nil
 }
 func (m *mockHyperVClient) GetVMFirmware(ctx context.Context, name string) (*client.VMFirmware, error) {
 	return m.getVMFirmwareFn(ctx, name)
@@ -294,7 +297,7 @@ func TestVMCreate_FirstBootDeviceNotAttached_Warning(t *testing.T) {
 		getVMFirmwareFn: func(_ context.Context, _ string) (*client.VMFirmware, error) {
 			return defaultFirmware(), nil
 		},
-		setVMFirstBootDeviceFn: func(_ context.Context, _ string, _ client.BootDevice) error {
+		setVMFirmwareFn: func(_ context.Context, _ string, _ client.VMFirmwareOptions) error {
 			return fmt.Errorf("the drive at controller 0:0 is not attached yet")
 		},
 	}
@@ -331,7 +334,7 @@ func TestVMCreate_FirstBootDeviceOtherError_DeletesVM(t *testing.T) {
 		createVMFn: func(_ context.Context, _ client.VMOptions) (*client.VM, error) {
 			return defaultVM("Off"), nil
 		},
-		setVMFirstBootDeviceFn: func(_ context.Context, _ string, _ client.BootDevice) error {
+		setVMFirmwareFn: func(_ context.Context, _ string, _ client.VMFirmwareOptions) error {
 			return fmt.Errorf("unexpected firmware error")
 		},
 	}
@@ -416,7 +419,7 @@ func TestVMCreate_InlineHardDrive(t *testing.T) {
 		getVMFirmwareFn: func(_ context.Context, _ string) (*client.VMFirmware, error) {
 			return defaultFirmware(), nil
 		},
-		setVMFirstBootDeviceFn: func(_ context.Context, _ string, _ client.BootDevice) error {
+		setVMFirmwareFn: func(_ context.Context, _ string, _ client.VMFirmwareOptions) error {
 			return nil
 		},
 		createHardDriveFn: func(_ context.Context, opts client.HardDriveOptions) (*client.HardDrive, error) {

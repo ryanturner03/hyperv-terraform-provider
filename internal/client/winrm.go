@@ -37,7 +37,7 @@ type ConnectionConfig struct {
 
 // WinRMClient wraps a PowerShellRunner to execute commands on a remote Hyper-V host.
 type WinRMClient struct {
-	ps   psExecutor
+	ps   PSExecutor
 	mu   sync.Mutex             // protects vmMu map
 	vmMu map[string]*sync.Mutex // per-VM locks
 }
@@ -58,7 +58,7 @@ func (c *WinRMClient) vmLock(name string) func() {
 }
 
 // PS returns the underlying PowerShellRunner for executing commands.
-func (c *WinRMClient) PS() psExecutor {
+func (c *WinRMClient) PS() PSExecutor {
 	return c.ps
 }
 

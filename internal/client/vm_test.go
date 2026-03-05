@@ -92,6 +92,21 @@ func TestBuildSetVMFirmwareCommand(t *testing.T) {
 				"-SecureBootTemplate 'MicrosoftWindows'",
 			},
 		},
+		{
+			name:   "with first boot device",
+			vmName: "test-vm",
+			opts: VMFirmwareOptions{
+				SecureBootEnabled: &boolFalse,
+				FirstBootDevice:   &BootDevice{DeviceType: "HardDiskDrive", ControllerNumber: 0, ControllerLocation: 0},
+			},
+			contains: []string{
+				"Get-VMHardDiskDrive -VMName 'test-vm'",
+				"ControllerNumber -eq 0",
+				"ControllerLocation -eq 0",
+				"-FirstBootDevice $dev",
+				"-EnableSecureBoot Off",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
