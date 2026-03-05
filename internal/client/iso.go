@@ -26,9 +26,15 @@ func buildCreateISOScript(opts ISOOptions) string {
 	for _, name := range filenames {
 		content := opts.Files[name]
 		b64 := base64.StdEncoding.EncodeToString([]byte(content))
+		escapedName := EscapePSString(name)
+		// Create parent directories for nested paths (e.g. "openstack/latest/meta_data.json")
 		sb.WriteString(fmt.Sprintf(
-			"  [System.IO.File]::WriteAllBytes((Join-Path $tempDir %s), [System.Convert]::FromBase64String('%s'))\n",
-			EscapePSString(name), b64,
+			"  $fp = Join-Path $tempDir %s; $fd = Split-Path -Parent $fp; if ($fd -ne $tempDir) { New-Item -ItemType Directory -Path $fd -Force | Out-Null }\n",
+			escapedName,
+		))
+		sb.WriteString(fmt.Sprintf(
+			"  [System.IO.File]::WriteAllBytes($fp, [System.Convert]::FromBase64String('%s'))\n",
+			b64,
 		))
 	}
 
