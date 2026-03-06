@@ -12,7 +12,9 @@ import (
 // PSExecutor abstracts PowerShell command execution for testing.
 type PSExecutor interface {
 	Run(ctx context.Context, command string) (string, string, error)
+	RunWithInput(ctx context.Context, command string, stdin string) (string, string, error)
 	RunJSON(ctx context.Context, command string, result any) error
+	RunJSONWithInput(ctx context.Context, command string, stdin string, result any) error
 }
 
 // EscapePSString wraps a value in single quotes with internal single quotes doubled.
@@ -33,7 +35,12 @@ func NewPowerShellRunner(client *winrm.Client) *PowerShellRunner {
 
 // Run executes a PowerShell command and returns stdout, stderr, and any error.
 func (r *PowerShellRunner) Run(ctx context.Context, command string) (string, string, error) {
-	stdout, stderr, exitCode, err := r.client.RunPSWithContextWithString(ctx, command, "")
+	return r.RunWithInput(ctx, command, "")
+}
+
+// RunWithInput executes a PowerShell command with stdin data and returns stdout, stderr, and any error.
+func (r *PowerShellRunner) RunWithInput(ctx context.Context, command string, stdin string) (string, string, error) {
+	stdout, stderr, exitCode, err := r.client.RunPSWithContextWithString(ctx, command, stdin)
 	if err != nil {
 		return "", "", fmt.Errorf("winrm error: %w", err)
 	}
@@ -43,10 +50,19 @@ func (r *PowerShellRunner) Run(ctx context.Context, command string) (string, str
 	return strings.TrimSpace(stdout), strings.TrimSpace(stderr), nil
 }
 
+// RunJSONWithInput executes a PowerShell command with stdin data and unmarshals the JSON output into result.
+func (r *PowerShellRunner) RunJSONWithInput(ctx context.Context, command string, stdin string, result any) error {
+	return r.runJSONInternal(ctx, command, stdin, result)
+}
+
 // RunJSON executes a PowerShell command and unmarshals the JSON output into result.
 // Handles PowerShell's ConvertTo-Json which may return an array even for single objects.
 func (r *PowerShellRunner) RunJSON(ctx context.Context, command string, result any) error {
-	stdout, stderr, err := r.Run(ctx, command)
+	return r.runJSONInternal(ctx, command, "", result)
+}
+
+func (r *PowerShellRunner) runJSONInternal(ctx context.Context, command string, stdin string, result any) error {
+	stdout, stderr, err := r.RunWithInput(ctx, command, stdin)
 	if err != nil {
 		if stderr != "" {
 			return fmt.Errorf("%w (stderr: %s)", err, stderr)

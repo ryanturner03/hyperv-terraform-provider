@@ -19,6 +19,10 @@ type mockPS struct {
 }
 
 func (m *mockPS) Run(ctx context.Context, command string) (string, string, error) {
+	return m.RunWithInput(ctx, command, "")
+}
+
+func (m *mockPS) RunWithInput(ctx context.Context, command string, stdin string) (string, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runCalls++
@@ -26,6 +30,10 @@ func (m *mockPS) Run(ctx context.Context, command string) (string, string, error
 }
 
 func (m *mockPS) RunJSON(ctx context.Context, command string, result any) error {
+	return m.RunJSONWithInput(ctx, command, "", result)
+}
+
+func (m *mockPS) RunJSONWithInput(ctx context.Context, command string, stdin string, result any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.runJSONCalls >= len(m.jsonResponses) {
