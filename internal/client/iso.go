@@ -3,11 +3,25 @@ package client
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 )
 
+// buildCreateISOStdinData builds a JSON payload of filename -> base64-encoded content
+// to be passed via stdin to the ISO creation script.
+func buildCreateISOStdinData(files map[string]string) string {
+	payload := make(map[string]string, len(files))
+	for name, content := range files {
+		payload[name] = base64.StdEncoding.EncodeToString([]byte(content))
+	}
+	data, _ := json.Marshal(payload)
+	return string(data)
+}
+
+// buildCreateISOScript builds a PowerShell script that reads file data from stdin (as JSON
+// with base64-encoded values), writes them to a temp directory, and creates an ISO.
+// File contents are passed via stdin to avoid Windows command-line length limits.
 func buildCreateISOScript(opts ISOOptions) string {
 	var sb strings.Builder
 	sb.WriteString("$ErrorActionPreference = 'Stop'\n")
@@ -15,28 +29,15 @@ func buildCreateISOScript(opts ISOOptions) string {
 	sb.WriteString("New-Item -ItemType Directory -Path $tempDir -Force | Out-Null\n")
 	sb.WriteString("try {\n")
 
-	// Write each file by base64-decoding its content
-	// Sort keys for deterministic script generation
-	filenames := make([]string, 0, len(opts.Files))
-	for name := range opts.Files {
-		filenames = append(filenames, name)
-	}
-	sort.Strings(filenames)
-
-	for _, name := range filenames {
-		content := opts.Files[name]
-		b64 := base64.StdEncoding.EncodeToString([]byte(content))
-		escapedName := EscapePSString(name)
-		// Create parent directories for nested paths (e.g. "openstack/latest/meta_data.json")
-		sb.WriteString(fmt.Sprintf(
-			"  $fp = Join-Path $tempDir %s; $fd = Split-Path -Parent $fp; if ($fd -ne $tempDir) { New-Item -ItemType Directory -Path $fd -Force | Out-Null }\n",
-			escapedName,
-		))
-		sb.WriteString(fmt.Sprintf(
-			"  [System.IO.File]::WriteAllBytes($fp, [System.Convert]::FromBase64String('%s'))\n",
-			b64,
-		))
-	}
+	// Read file data from stdin as JSON {filename: base64content}
+	sb.WriteString("  $jsonInput = @($input) -join ''\n")
+	sb.WriteString("  $files = $jsonInput | ConvertFrom-Json\n")
+	sb.WriteString("  foreach ($prop in $files.PSObject.Properties) {\n")
+	sb.WriteString("    $fp = Join-Path $tempDir $prop.Name\n")
+	sb.WriteString("    $fd = Split-Path -Parent $fp\n")
+	sb.WriteString("    if ($fd -ne $tempDir) { New-Item -ItemType Directory -Path $fd -Force | Out-Null }\n")
+	sb.WriteString("    [System.IO.File]::WriteAllBytes($fp, [System.Convert]::FromBase64String($prop.Value))\n")
+	sb.WriteString("  }\n")
 
 	// Create the ISO using IMAPI2
 	sb.WriteString(fmt.Sprintf("  $isoPath = %s\n", EscapePSString(opts.Path)))
@@ -96,7 +97,8 @@ func buildGetISOCommand(path string) string {
 
 func (c *WinRMClient) CreateISO(ctx context.Context, opts ISOOptions) (*ISOInfo, error) {
 	var info ISOInfo
-	err := c.ps.RunJSON(ctx, buildCreateISOScript(opts), &info)
+	stdinData := buildCreateISOStdinData(opts.Files)
+	err := c.ps.RunJSONWithInput(ctx, buildCreateISOScript(opts), stdinData, &info)
 	if err != nil {
 		return nil, fmt.Errorf("create ISO %q: %w", opts.Path, err)
 	}
