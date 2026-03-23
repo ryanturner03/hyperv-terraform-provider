@@ -194,6 +194,32 @@ func TestBuildSetVMFirmwareCommandInjection(t *testing.T) {
 	}
 }
 
+func TestBuildGrantVMStorageAccessCommand(t *testing.T) {
+	cmd := buildGrantVMStorageAccessCommand("test-vm")
+	expected := []string{
+		"Get-VM -Name 'test-vm'",
+		"Get-VMHardDiskDrive -VMName 'test-vm'",
+		"NT VIRTUAL MACHINE",
+		"FullControl",
+		"Get-Acl -LiteralPath",
+		"Set-Acl -LiteralPath",
+		"SetAccessRule",
+		"FileSystemAccessRule",
+	}
+	for _, s := range expected {
+		if !containsStr(cmd, s) {
+			t.Errorf("command missing expected substring %q", s)
+		}
+	}
+}
+
+func TestBuildGrantVMStorageAccessCommandInjection(t *testing.T) {
+	cmd := buildGrantVMStorageAccessCommand("test'; Remove-VM *; '")
+	if !containsStr(cmd, "'test''") {
+		t.Errorf("injection not properly escaped: %q", cmd)
+	}
+}
+
 func containsStr(haystack, needle string) bool {
 	return strings.Contains(haystack, needle)
 }

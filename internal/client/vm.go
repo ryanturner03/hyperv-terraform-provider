@@ -139,6 +139,13 @@ func (c *WinRMClient) SetVMState(ctx context.Context, name string, state VMState
 	var cmd string
 	switch state {
 	case VMStateRunning:
+		// Grant the VM's security principal full control on all attached VHDs
+		// before starting. This is necessary because VHD replacement (destroy +
+		// recreate) produces a new file that lacks the ACL entry Hyper-V set
+		// when the drive was first attached.
+		if err := c.grantVMStorageAccess(ctx, name); err != nil {
+			return fmt.Errorf("grant VM %q storage access: %w", name, err)
+		}
 		cmd = fmt.Sprintf("Start-VM -Name %s -ErrorAction Stop", EscapePSString(name))
 	case VMStateOff:
 		cmd = fmt.Sprintf("Stop-VM -Name %s -Force -TurnOff -ErrorAction Stop", EscapePSString(name))
@@ -152,4 +159,23 @@ func (c *WinRMClient) SetVMState(ctx context.Context, name string, state VMState
 		}
 		return nil
 	})
+}
+
+// grantVMStorageAccess grants the VM's security principal (NT VIRTUAL MACHINE\{VMId})
+// full control on all VHD files attached to the VM. This ensures the VM can access
+// VHDs that were replaced (destroyed and recreated) after the initial attachment.
+func (c *WinRMClient) grantVMStorageAccess(ctx context.Context, name string) error {
+	_, _, err := c.ps.Run(ctx, buildGrantVMStorageAccessCommand(name))
+	return err
+}
+
+func buildGrantVMStorageAccessCommand(name string) string {
+	return fmt.Sprintf(`$vmId = (Get-VM -Name %[1]s -ErrorAction Stop).VMId
+Get-VMHardDiskDrive -VMName %[1]s -ErrorAction SilentlyContinue | Where-Object { $_.Path } | ForEach-Object {
+    $acl = Get-Acl -LiteralPath $_.Path
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "NT VIRTUAL MACHINE\$vmId", 'FullControl', 'Allow')
+    $acl.SetAccessRule($rule)
+    Set-Acl -LiteralPath $_.Path -AclObject $acl
+}`, EscapePSString(name))
 }
