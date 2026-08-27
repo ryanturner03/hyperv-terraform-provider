@@ -160,13 +160,13 @@ func createInlineNetworkAdapters(ctx context.Context, c client.HyperVClient, vmN
 		macState := types.StringValue(normalizeMAC(adapter.MacAddress))
 		dynState := types.BoolValue(adapter.DynamicMacAddress)
 		if !p.MacAddress.IsNull() && !p.MacAddress.IsUnknown() && p.MacAddress.ValueString() != "" {
+			// Preserve the configured formatting exactly as planned.
 			macState = p.MacAddress
-			// A static MAC implies dynamic addressing is off; mirror the plan so
-			// the two attributes stay consistent with each other.
-			if !p.DynamicMacAddress.IsNull() && !p.DynamicMacAddress.IsUnknown() {
-				dynState = p.DynamicMacAddress
-			}
 		}
+		// dynamic_mac_address is NOT patched here: the dynamicMACFromStaticMAC
+		// plan modifier already plans false when a static MAC is set, so the
+		// host's value matches the plan. Patching it again would hide a genuine
+		// mismatch if that ever stopped being true.
 
 		result = append(result, inlineNetworkAdapterModel{
 			Name:              types.StringValue(adapter.Name),

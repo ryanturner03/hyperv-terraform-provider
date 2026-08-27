@@ -8,12 +8,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -21,12 +20,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/ryan/terraform-provider-hyperv/internal/client"
 )
 
 var (
-	_ resource.Resource                = &vmResource{}
-	_ resource.ResourceWithConfigure   = &vmResource{}
+	_ resource.Resource                   = &vmResource{}
+	_ resource.ResourceWithConfigure      = &vmResource{}
 	_ resource.ResourceWithValidateConfig = &vmResource{}
 )
 
@@ -326,7 +326,10 @@ func (r *vmResource) Schema(ctx context.Context, req resource.SchemaRequest, res
 							Optional:    true,
 							Computed:    true,
 							Default:     booldefault.StaticBool(true),
-							Description: "Whether to use a dynamic MAC address (default: true).",
+							Description: "Whether to use a dynamic MAC address (default: true). Planned as false when mac_address is set.",
+							PlanModifiers: []planmodifier.Bool{
+								dynamicMACFromStaticMAC{},
+							},
 						},
 					},
 				},

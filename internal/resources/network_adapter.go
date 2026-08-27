@@ -75,7 +75,10 @@ func (r *networkAdapterResource) Schema(ctx context.Context, req resource.Schema
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(true),
-				Description: "Whether the MAC address is dynamically assigned.",
+				Description: "Whether the MAC address is dynamically assigned. Planned as false when mac_address is set.",
+				PlanModifiers: []planmodifier.Bool{
+					dynamicMACFromStaticMAC{},
+				},
 			},
 		},
 	}
