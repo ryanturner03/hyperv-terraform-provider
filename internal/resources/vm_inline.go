@@ -68,9 +68,9 @@ func createInlineHardDrives(ctx context.Context, c client.HyperVClient, vmName s
 	var result []inlineHardDriveModel
 	for _, p := range planned {
 		opts := client.HardDriveOptions{
-			VMName:         vmName,
-			Path:           p.Path.ValueString(),
-			ControllerType: p.ControllerType.ValueString(),
+			VMName:           vmName,
+			Path:             p.Path.ValueString(),
+			ControllerType:   p.ControllerType.ValueString(),
 			ControllerNumber: int(p.ControllerNumber.ValueInt64()),
 		}
 		if !p.ControllerLocation.IsNull() && !p.ControllerLocation.IsUnknown() {
@@ -128,9 +128,9 @@ func createInlineNetworkAdapters(ctx context.Context, c client.HyperVClient, vmN
 	var result []inlineNetworkAdapterModel
 	for _, p := range planned {
 		opts := client.AdapterOptions{
-			VMName:     vmName,
-			Name:       p.Name.ValueString(),
-			SwitchName: p.SwitchName.ValueString(),
+			VMName:            vmName,
+			Name:              p.Name.ValueString(),
+			SwitchName:        p.SwitchName.ValueString(),
 			DynamicMacAddress: p.DynamicMacAddress.ValueBool(),
 		}
 		if !p.MacAddress.IsNull() && !p.MacAddress.IsUnknown() && p.MacAddress.ValueString() != "" {
@@ -146,12 +146,34 @@ func createInlineNetworkAdapters(ctx context.Context, c client.HyperVClient, vmN
 			return nil, fmt.Errorf("create inline network adapter %q: %w", opts.Name, err)
 		}
 
+		// Terraform requires post-apply state to equal the plan for every
+		// configured attribute. Hyper-V normalises what it echoes back, so
+		// storing the read-back verbatim breaks that contract:
+		//
+		//   mac_address:         sent "00:15:5D:C0:B6:68", returned "00155DC0B668"
+		//   dynamic_mac_address: planned true, but setting a static MAC turns it
+		//                        off, so the host returns false
+		//
+		// Both produced "Provider produced inconsistent result after apply".
+		// Keep the planned value whenever the user configured one, and fall back
+		// to the host's value only for attributes left unset.
+		macState := types.StringValue(normalizeMAC(adapter.MacAddress))
+		dynState := types.BoolValue(adapter.DynamicMacAddress)
+		if !p.MacAddress.IsNull() && !p.MacAddress.IsUnknown() && p.MacAddress.ValueString() != "" {
+			macState = p.MacAddress
+			// A static MAC implies dynamic addressing is off; mirror the plan so
+			// the two attributes stay consistent with each other.
+			if !p.DynamicMacAddress.IsNull() && !p.DynamicMacAddress.IsUnknown() {
+				dynState = p.DynamicMacAddress
+			}
+		}
+
 		result = append(result, inlineNetworkAdapterModel{
 			Name:              types.StringValue(adapter.Name),
 			SwitchName:        types.StringValue(adapter.SwitchName),
 			VlanID:            types.Int64Value(int64(adapter.VlanID)),
-			MacAddress:        types.StringValue(adapter.MacAddress),
-			DynamicMacAddress: types.BoolValue(adapter.DynamicMacAddress),
+			MacAddress:        macState,
+			DynamicMacAddress: dynState,
 		})
 	}
 	return result, nil
@@ -223,6 +245,34 @@ func dvdDrivesFromClient(drives []client.DVDDrive) []inlineDVDDriveModel {
 	return result
 }
 
+// normalizeMAC renders a MAC in canonical colon-separated upper-case form.
+// Hyper-V accepts "00:15:5D:C0:B6:68" but echoes back "00155DC0B668"; without
+// normalising, the refreshed state never matches the configuration and every
+// subsequent plan shows a spurious mac_address diff. Input that is not 12 hex
+// digits (already colon-formatted, or empty) is returned unchanged.
+func normalizeMAC(s string) string {
+	var hex []rune
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'A' && r <= 'F':
+			hex = append(hex, r)
+		case r >= 'a' && r <= 'f':
+			hex = append(hex, r-32)
+		}
+	}
+	if len(hex) != 12 {
+		return s
+	}
+	out := make([]rune, 0, 17)
+	for i := 0; i < 12; i += 2 {
+		if i > 0 {
+			out = append(out, ':')
+		}
+		out = append(out, hex[i], hex[i+1])
+	}
+	return string(out)
+}
+
 func networkAdaptersFromClient(adapters []client.NetworkAdapter) []inlineNetworkAdapterModel {
 	if len(adapters) == 0 {
 		return nil
@@ -233,7 +283,7 @@ func networkAdaptersFromClient(adapters []client.NetworkAdapter) []inlineNetwork
 			Name:              types.StringValue(a.Name),
 			SwitchName:        types.StringValue(a.SwitchName),
 			VlanID:            types.Int64Value(int64(a.VlanID)),
-			MacAddress:        types.StringValue(a.MacAddress),
+			MacAddress:        types.StringValue(normalizeMAC(a.MacAddress)),
 			DynamicMacAddress: types.BoolValue(a.DynamicMacAddress),
 		})
 	}
@@ -244,9 +294,9 @@ func networkAdaptersFromClient(adapters []client.NetworkAdapter) []inlineNetwork
 
 func diffAndApplyHardDrives(ctx context.Context, c client.HyperVClient, vmName string, oldList, newList []inlineHardDriveModel) error {
 	type hdKey struct {
-		ct   string
-		cn   int64
-		cl   int64
+		ct string
+		cn int64
+		cl int64
 	}
 
 	oldMap := make(map[hdKey]inlineHardDriveModel)
