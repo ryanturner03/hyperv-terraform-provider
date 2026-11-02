@@ -33,6 +33,8 @@ TF_ACC=1 go test -v -count=1 -tags=acceptance -run TestAcc ./internal/provider/
 
 No Makefile — standard `go build`/`go test` workflow.
 
+Releases: push a `v*` tag and GitHub Actions runs GoReleaser (`.goreleaser.yml`, `.github/workflows/release.yml`). See `docs/releasing.md`. Validate config changes locally with `go run github.com/goreleaser/goreleaser/v2@latest check`.
+
 ## Architecture
 
 Three-layer design with clean separation:

@@ -37,6 +37,52 @@ winrm set winrm/config/service/auth '@{Basic="true"}'
 Restart-Service WinRM
 ```
 
+## Installation
+
+Pre-built binaries for Linux, macOS, and Windows (amd64 and arm64) are published on the
+[GitHub releases page](https://github.com/ryanturner03/hyperv-terraform-provider/releases).
+The provider is not on the public Terraform Registry, so install it into Terraform's local
+plugin directory with the install script. It downloads the right archive, verifies the
+SHA256 checksum, and places the binary where `terraform init` looks automatically.
+
+**Linux / macOS**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryanturner03/hyperv-terraform-provider/main/scripts/install.sh | sh
+# or pin a version:
+curl -fsSL https://raw.githubusercontent.com/ryanturner03/hyperv-terraform-provider/main/scripts/install.sh | sh -s -- v0.2.0
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/ryanturner03/hyperv-terraform-provider/main/scripts/install.ps1 | iex; Install-HypervProvider
+# or pin a version:
+irm https://raw.githubusercontent.com/ryanturner03/hyperv-terraform-provider/main/scripts/install.ps1 | iex; Install-HypervProvider -Version v0.2.0
+```
+
+Then reference the provider with an exact version (local mirrors do not support version ranges
+unless every candidate version is installed):
+
+```hcl
+terraform {
+  required_providers {
+    hyperv = {
+      source  = "ryan/hyperv"
+      version = "0.2.0"
+    }
+  }
+}
+```
+
+**Manual install / CI runners.** Download the zip and `SHA256SUMS` from the release, verify, and
+unzip into `<plugin dir>/registry.terraform.io/ryan/hyperv/<version>/<os>_<arch>/`, where the
+plugin dir is `~/.terraform.d/plugins` on Linux/macOS or `%APPDATA%\terraform.d\plugins` on
+Windows. To serve releases from an internal mirror, point `BASE_URL` at it when running
+`install.sh`, or configure a
+[`filesystem_mirror`](https://developer.hashicorp.com/terraform/cli/config/config-file#filesystem_mirror)
+in the Terraform CLI config.
+
 ## Usage
 
 ### Inline Blocks (Recommended)
@@ -181,7 +227,7 @@ resource "hyperv_vm" "lab_vm" {
 }
 ```
 
-## Building
+## Building from source
 
 ```bash
 go build -o terraform-provider-hyperv .
@@ -197,3 +243,5 @@ provider_installation {
   direct {}
 }
 ```
+
+See [docs/releasing.md](docs/releasing.md) for how releases are cut.

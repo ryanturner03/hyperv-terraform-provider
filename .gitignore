@@ -27,3 +27,6 @@ packer_cache/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# GoReleaser output
+/dist/
