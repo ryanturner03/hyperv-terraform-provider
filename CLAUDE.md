@@ -64,6 +64,7 @@ The `hyperv_iso` resource creates NoCloud seed ISOs with `meta-data`, `user-data
 
 - Dynamic MAC addresses are assigned when the VM **starts**, not when the adapter is created. Off VMs will show MAC `000000000000` — this is expected, not a bug.
 - Gen2 VMs use SCSI controllers and support Secure Boot. Gen1 VMs use IDE (max 4 devices) and have no Secure Boot.
+- **Gen1 `New-VM` auto-creates an empty DVD drive at IDE 1:0** (and both generations get a default NIC). `CreateVM` removes these right after creation so Terraform-declared devices are the only ones on the VM; otherwise the post-apply read-back has more drives than configured. `Add-VMDvdDrive`/`Add-VMHardDiskDrive` on IDE require the VM to be Off.
 - **`Set-VMFirmware` resets sibling settings.** Each call to `Set-VMFirmware` resets any settings not included in that call. For example, `-FirstBootDevice` resets Secure Boot back to default, and `-EnableSecureBoot Off` resets the boot order. Always combine all firmware settings (boot device, secure boot, template) into a **single** `Set-VMFirmware` call. See `buildSetVMFirmwareCommand()` in `internal/client/vm_firmware.go`.
 - PowerShell commands executed remotely may wrap single objects in arrays — the client's `RunJSON` handles this with array unwrapping.
 - Hyper-V has transient lock conflicts during concurrent operations — the client retries these automatically (3 attempts, 3s delay).

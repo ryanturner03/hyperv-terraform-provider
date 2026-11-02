@@ -65,6 +65,16 @@ func (c *WinRMClient) CreateVM(ctx context.Context, opts VMOptions) (*VM, error)
 	removeNIC := fmt.Sprintf("Remove-VMNetworkAdapter -VMName %s -ErrorAction SilentlyContinue", EscapePSString(opts.Name))
 	_, _, _ = c.ps.Run(ctx, removeNIC)
 
+	// Gen1 VMs get a default empty DVD drive at IDE 1:0 from Hyper-V. Remove it
+	// so dvd_drive blocks / hyperv_dvd_drive resources are the only drives;
+	// otherwise the post-apply read-back has one more drive than configured.
+	if opts.Generation == 1 {
+		if _, _, err := c.ps.Run(ctx, buildRemoveDefaultDVDCommand(opts.Name)); err != nil {
+			_ = c.deleteVMNoLock(ctx, opts.Name)
+			return nil, fmt.Errorf("remove default DVD drive from VM %q: %w", opts.Name, err)
+		}
+	}
+
 	err = retryOnConflict(ctx, 3, 3*time.Second, func() error {
 		_, _, err := c.ps.Run(ctx, buildSetVMCommand(opts))
 		return err
@@ -178,4 +188,12 @@ Get-VMHardDiskDrive -VMName %[1]s -ErrorAction SilentlyContinue | Where-Object {
     $acl.SetAccessRule($rule)
     Set-Acl -LiteralPath $_.Path -AclObject $acl
 }`, EscapePSString(name))
+}
+
+// buildRemoveDefaultDVDCommand removes every DVD drive on the VM. Hyper-V
+// auto-creates an empty DVD drive at IDE 1:0 on Generation 1 VMs; it is run
+// immediately after New-VM, before any Terraform-declared drive is attached,
+// so only declared drives exist afterwards.
+func buildRemoveDefaultDVDCommand(name string) string {
+	return fmt.Sprintf("Get-VMDvdDrive -VMName %s -ErrorAction Stop | Remove-VMDvdDrive -ErrorAction Stop", EscapePSString(name))
 }
