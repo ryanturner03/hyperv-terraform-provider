@@ -16,6 +16,8 @@ type mockPS struct {
 	jsonResponses []any
 	// runStdout, if set, is returned by Run instead of "".
 	runStdout string
+	// commands records every command passed to Run/RunWithInput, in order.
+	commands []string
 }
 
 func (m *mockPS) Run(ctx context.Context, command string) (string, string, error) {
@@ -26,6 +28,7 @@ func (m *mockPS) RunWithInput(ctx context.Context, command string, stdin string)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runCalls++
+	m.commands = append(m.commands, command)
 	return m.runStdout, "", nil
 }
 

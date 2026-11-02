@@ -298,6 +298,11 @@ Gen 1 VMs have exactly 2 IDE controllers, each with 2 locations:
 | 1 | 0 | DVD drive (cloud-init ISO) |
 | 1 | 1 | Additional device |
 
+Hyper-V creates every Gen 1 VM with an empty default DVD drive at IDE 1/0. The provider
+removes it immediately after `New-VM`, so the only DVD drives on the VM are the ones you
+declare (inline `dvd_drive` blocks or `hyperv_dvd_drive` resources). Declare a `dvd_drive`
+explicitly if you need one; any IDE slot works.
+
 This limits Gen 1 VMs to 4 IDE devices total. For additional disks, use SCSI:
 
 ```hcl
