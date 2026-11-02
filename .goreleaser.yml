@@ -30,6 +30,9 @@ builds:
 archives:
   - formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Binary only, per Terraform Registry convention (no README/CHANGELOG/LICENSE).
+    files:
+      - none*
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
