@@ -28,6 +28,7 @@ var (
 	_ resource.Resource                   = &vmResource{}
 	_ resource.ResourceWithConfigure      = &vmResource{}
 	_ resource.ResourceWithValidateConfig = &vmResource{}
+	_ resource.ResourceWithModifyPlan     = &vmResource{}
 )
 
 type vmResource struct {
@@ -353,16 +354,19 @@ func (r *vmResource) ValidateConfig(ctx context.Context, req resource.ValidateCo
 
 	gen := config.Generation.ValueInt64()
 	if gen == 1 {
-		if !config.SecureBootEnabled.IsNull() {
+		// Gen1 VMs use BIOS and have no Secure Boot. Only reject what is
+		// genuinely impossible; false / unset is fine and maps to the fixed
+		// Gen1 state (see setGen1FirmwareState).
+		if !config.SecureBootEnabled.IsNull() && !config.SecureBootEnabled.IsUnknown() && config.SecureBootEnabled.ValueBool() {
 			resp.Diagnostics.AddError(
 				"Invalid Configuration",
-				"secure_boot_enabled is only supported on Generation 2 VMs.",
+				"secure_boot_enabled = true is only supported on Generation 2 VMs. Generation 1 VMs use BIOS firmware and cannot enable Secure Boot.",
 			)
 		}
-		if !config.SecureBootTemplate.IsNull() {
+		if !config.SecureBootTemplate.IsNull() && !config.SecureBootTemplate.IsUnknown() && config.SecureBootTemplate.ValueString() != "" {
 			resp.Diagnostics.AddError(
 				"Invalid Configuration",
-				"secure_boot_template is only supported on Generation 2 VMs.",
+				"secure_boot_template is only supported on Generation 2 VMs. Generation 1 VMs use BIOS firmware and have no Secure Boot template.",
 			)
 		}
 		if !config.FirstBootDevice.IsNull() {
@@ -563,6 +567,8 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		if !plannedFBD.IsNull() {
 			plan.FirstBootDevice = plannedFBD
 		}
+	} else {
+		setGen1FirmwareState(&plan)
 	}
 
 	// Read back inline sub-resources from server (not from create results)
@@ -634,9 +640,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 			state.FirstBootDevice = priorFBD
 		}
 	} else {
-		state.SecureBootEnabled = types.BoolNull()
-		state.SecureBootTemplate = types.StringNull()
-		state.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+		setGen1FirmwareState(&state)
 	}
 
 	// Read back inline sub-resources only if state has non-null lists
@@ -817,9 +821,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	if isGen2 {
 		r.readFirmwareState(ctx, name, &plan, &resp.Diagnostics)
 	} else {
-		plan.SecureBootEnabled = types.BoolNull()
-		plan.SecureBootTemplate = types.StringNull()
-		plan.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+		setGen1FirmwareState(&plan)
 	}
 
 	// Read back inline sub-resources into state
@@ -944,4 +946,33 @@ func mapVMToState(vm *client.VM, model *vmResourceModel, diags *diag.Diagnostics
 	model.AutomaticStartAction = types.StringValue(vm.AutomaticStartAction)
 	model.AutomaticStopAction = types.StringValue(vm.AutomaticStopAction)
 	model.CheckpointType = types.StringValue(vm.CheckpointType)
+}
+
+// setGen1FirmwareState writes the fixed firmware values for a Generation 1 VM.
+// Gen1 uses BIOS: there is no Secure Boot and Get-/Set-VMFirmware error on the
+// host, so the values come from this rule rather than a read-back. The values
+// are concrete (not null) so that an Optional+Computed attribute left unset in
+// config never remains unknown after apply.
+func setGen1FirmwareState(model *vmResourceModel) {
+	model.SecureBootEnabled = types.BoolValue(false)
+	model.SecureBootTemplate = types.StringValue("")
+	model.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+}
+
+// ModifyPlan makes the Generation 1 firmware attributes known at plan time so
+// they are not shown as "(known after apply)" and so apply is idempotent.
+func (r *vmResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return // destroy
+	}
+	var plan vmResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.Generation.IsNull() || plan.Generation.IsUnknown() || plan.Generation.ValueInt64() != 1 {
+		return
+	}
+	setGen1FirmwareState(&plan)
+	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 }

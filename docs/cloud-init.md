@@ -54,6 +54,10 @@ The `NetworkConfigPlugin` is required for static IP assignment. Without it, clou
 | Packer base image | `ubuntu-2404-gen1.vhdx` | `ubuntu-2404-gen2.vhdx` |
 
 - **Gen 1**: Simpler setup. No Secure Boot to deal with. OS disk must be on IDE.
+  Leave `secure_boot_enabled` / `secure_boot_template` unset (or set `secure_boot_enabled = false`);
+  the provider stores them as `false` / `""` without touching VM firmware. Setting
+  `secure_boot_enabled = true` or a template on a Gen 1 VM is a validation error.
+  A module can pass `secure_boot_enabled = var.generation == 2 ? var.secure_boot_enabled : null`.
 - **Gen 2**: Required for UEFI, Secure Boot, larger disks (>2TB boot), and PXE boot from SCSI. SCSI-only.
 
 ## Terraform Configuration
