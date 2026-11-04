@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/config"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/ryan/terraform-provider-hyperv/internal/client"
 )
@@ -191,6 +192,44 @@ resource "hyperv_vm" "test" {
 					resource.TestCheckResourceAttr("hyperv_vm.test", "memory_startup_bytes", "1073741824"),
 					resource.TestCheckResourceAttr("hyperv_vm.test", "state", "Off"),
 				),
+			},
+		},
+	})
+}
+
+// Regression for issue #20: a Gen2 VM with first_boot_device unset must not
+// leave the attribute unknown after apply, and must re-plan clean.
+func TestAcc_VM_Gen2_NoFirstBootDevice(t *testing.T) {
+	testAccPreCheck(t)
+	cfg := testAccProviderConfig() + `
+resource "hyperv_vm" "test" {
+  name                 = "tf-acc-fbd-unset"
+  generation           = 2
+  processor_count      = 2
+  memory_startup_bytes = 2147483648
+  dynamic_memory       = false
+  state                = "Off"
+}
+`
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("hyperv_vm.test", "generation", "2"),
+					resource.TestCheckNoResourceAttr("hyperv_vm.test", "first_boot_device.device_type"),
+					resource.TestCheckResourceAttrSet("hyperv_vm.test", "secure_boot_enabled"),
+				),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				Config: cfg,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 			},
 		},
 	})

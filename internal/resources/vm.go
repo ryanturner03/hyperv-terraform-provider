@@ -564,9 +564,10 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		// Preserve the planned first_boot_device value. We just set it via
 		// SetVMFirmware, so we know it's correct. The read-back can return
 		// Unknown/null due to WinRM deserialization issues with type detection.
-		if !plannedFBD.IsNull() {
+		if !plannedFBD.IsNull() && !plannedFBD.IsUnknown() {
 			plan.FirstBootDevice = plannedFBD
 		}
+		resolveUnknownFirmwareState(&plan)
 	} else {
 		setGen1FirmwareState(&plan)
 	}
@@ -639,6 +640,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 		if state.FirstBootDevice.IsNull() && !priorFBD.IsNull() {
 			state.FirstBootDevice = priorFBD
 		}
+		resolveUnknownFirmwareState(&state)
 	} else {
 		setGen1FirmwareState(&state)
 	}
@@ -820,6 +822,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 
 	if isGen2 {
 		r.readFirmwareState(ctx, name, &plan, &resp.Diagnostics)
+		resolveUnknownFirmwareState(&plan)
 	} else {
 		setGen1FirmwareState(&plan)
 	}
@@ -957,6 +960,22 @@ func setGen1FirmwareState(model *vmResourceModel) {
 	model.SecureBootEnabled = types.BoolValue(false)
 	model.SecureBootTemplate = types.StringValue("")
 	model.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+}
+
+// resolveUnknownFirmwareState replaces any firmware attribute that is still
+// unknown after the read-back with null. Optional+Computed attributes left
+// unset in config plan as unknown on create, and readFirmwareState leaves them
+// untouched when Get-VMFirmware fails; Terraform rejects unknowns after apply.
+func resolveUnknownFirmwareState(model *vmResourceModel) {
+	if model.FirstBootDevice.IsUnknown() {
+		model.FirstBootDevice = types.ObjectNull(firstBootDeviceAttrTypes())
+	}
+	if model.SecureBootEnabled.IsUnknown() {
+		model.SecureBootEnabled = types.BoolNull()
+	}
+	if model.SecureBootTemplate.IsUnknown() {
+		model.SecureBootTemplate = types.StringNull()
+	}
 }
 
 // ModifyPlan makes the Generation 1 firmware attributes known at plan time so
