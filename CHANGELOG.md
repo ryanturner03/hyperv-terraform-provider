@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-11-03
+
+### Fixed
+- Generation 2 `hyperv_vm` with `first_boot_device` unset no longer fails apply
+  with "provider still indicated an unknown value" (#20, regression in 0.2.0).
+  Firmware attributes that are still unknown after the read-back, including when
+  `Get-VMFirmware` fails, are now stored as null.
+
+### Changed
+- Dependencies: terraform-plugin-framework 1.19.0, terraform-plugin-go 0.31.0,
+  terraform-plugin-testing 1.16.0, golang.org/x/crypto 0.58.0.
+
 ## [0.2.1] - 2026-11-02
 
 ### Fixed
